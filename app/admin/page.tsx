@@ -42,6 +42,7 @@ export default function AdminPage() {
   const [staff, setStaff] = useState<any[]>([]);
   const [service, setService] = useState<any[]>([]);
   const [insure, setInsure] = useState<any[]>([]);
+  const [rides, setRides] = useState<any[]>([]); // NEW - Ride / test-drive bookings
   const [qr, setQr] = useState('');
   const [mode, setMode] = useState('in');
   const [scanning, setScanning] = useState(false);
@@ -71,6 +72,7 @@ export default function AdminPage() {
   const [vColor, setVColor] = useState('Black');
   const [vPrice, setVPrice] = useState('');
   const [vQty, setVQty] = useState('1');
+  const [vImage, setVImage] = useState(''); // NEW - vehicle image URL (Cloudinary upload)
   const [cName, setCName] = useState('');
   const [cPhone, setCPhone] = useState('');
   const [cAddr, setCAddr] = useState('');
@@ -203,6 +205,11 @@ export default function AdminPage() {
     } catch {
       setList(readLocalList('hravo_transactions'));
     }
+
+    try {
+      const r = await sup.from('ride_bookings').select('*').order('created_at', { ascending: false });
+      if (r.data) setRides(r.data); else setRides(readLocalList('hravo_ride_bookings'));
+    } catch { setRides(readLocalList('hravo_ride_bookings')); }
 
     try { const ca = await sup.from('capital_accounts').select('*').order('created_at', { ascending: false }); if (ca.data) { setCapitalList(ca.data); writeLocalList('hravo_capital', ca.data); } else setCapitalList(readLocalList('hravo_capital')); } catch { setCapitalList(readLocalList('hravo_capital')); }
     try { const lo = await sup.from('loans').select('*').order('created_at', { ascending: false }); if (lo.data) { setLoansList(lo.data); writeLocalList('hravo_loans', lo.data); } else setLoansList(readLocalList('hravo_loans')); } catch { setLoansList(readLocalList('hravo_loans')); }
@@ -389,6 +396,26 @@ export default function AdminPage() {
     handleQrSuccess(qr);
   };
 
+  const uploadImage = async (e: any) => { // NEW
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = async () => {
+      try {
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          body: JSON.stringify({ image: reader.result }),
+        });
+        const data = await res.json();
+        if (data.url) setVImage(data.url);
+        else alert('Upload failed: ' + (data.error || 'Unknown error'));
+      } catch (err: any) {
+        alert('Upload error: ' + (err?.message || err));
+      }
+    };
+  };
+
   const addPart = async () => {
     if (!pName) return;
     const sup = getSupabase();
@@ -416,8 +443,8 @@ export default function AdminPage() {
   const addVeh = async () => {
     if (!vModel) return alert('Model');
     const sup = getSupabase();
-    await sup.from('vehicle_inventory').insert([{ vehicle_type: vCat, model_name: vModel, chassis_no: vChassis, engine_no: vEngine, color: vColor, stock: Number(vQty || 1), price: Number(vPrice || 0) }]);
-    setVModel(''); setVChassis(''); setVEngine(''); setVPrice(''); load();
+    await sup.from('vehicle_inventory').insert([{ vehicle_type: vCat, model_name: vModel, chassis_no: vChassis, engine_no: vEngine, color: vColor, stock: Number(vQty || 1), price: Number(vPrice || 0), image_url: vImage }]);
+    setVModel(''); setVChassis(''); setVEngine(''); setVPrice(''); setVImage(''); load();
   };
   const addCust = async () => {
     const name = cName.trim();
@@ -569,7 +596,7 @@ export default function AdminPage() {
     }
 
     const sup = getSupabase();
-    const t = showDeleteConfirm.tb === 'inv'? 'inventory' : showDeleteConfirm.tb === 'veh'? 'vehicle_inventory' : showDeleteConfirm.tb === 'staff'? 'staff_profiles' : showDeleteConfirm.tb === 'cust'? 'customer_profiles' : showDeleteConfirm.tb === 'service'? 'service_bookings' : showDeleteConfirm.tb === 'ins'? 'insurance' : showDeleteConfirm.tb === 'cash_ledger' ? 'cash_ledger' : showDeleteConfirm.tb === 'finance_journal' ? 'finance_journal' : showDeleteConfirm.tb === 'capital' ? 'capital_accounts' : showDeleteConfirm.tb === 'loan' ? 'loans' : showDeleteConfirm.tb === 'loan_payment' ? 'loan_payments' : showDeleteConfirm.tb === 'vendor_payable' ? 'vendor_payables' : showDeleteConfirm.tb === 'expense' ? 'expenses' : showDeleteConfirm.tb === 'asset' ? 'assets' : 'transactions';
+    const t = showDeleteConfirm.tb === 'inv'? 'inventory' : showDeleteConfirm.tb === 'veh'? 'vehicle_inventory' : showDeleteConfirm.tb === 'staff'? 'staff_profiles' : showDeleteConfirm.tb === 'cust'? 'customer_profiles' : showDeleteConfirm.tb === 'service'? 'service_bookings' : showDeleteConfirm.tb === 'ins'? 'insurance' : showDeleteConfirm.tb === 'cash_ledger' ? 'cash_ledger' : showDeleteConfirm.tb === 'finance_journal' ? 'finance_journal' : showDeleteConfirm.tb === 'capital' ? 'capital_accounts' : showDeleteConfirm.tb === 'loan' ? 'loans' : showDeleteConfirm.tb === 'loan_payment' ? 'loan_payments' : showDeleteConfirm.tb === 'vendor_payable' ? 'vendor_payables' : showDeleteConfirm.tb === 'expense' ? 'expenses' : showDeleteConfirm.tb === 'asset' ? 'assets' : showDeleteConfirm.tb === 'ride' ? 'ride_bookings' : 'transactions';
     try {
       await sup.from(t).delete().eq('id', showDeleteConfirm.id);
       const localKeyMap: any = {
@@ -578,6 +605,7 @@ export default function AdminPage() {
         staff_profiles: 'hravo_staff_profiles',
         customer_profiles: 'hravo_customer_profiles',
         service_bookings: 'hravo_service_bookings',
+        ride_bookings: 'hravo_ride_bookings',
         insurance: 'hravo_insurance',
         cash_ledger: 'hravo_cash_ledger',
         transactions: 'hravo_transactions',
@@ -696,6 +724,7 @@ export default function AdminPage() {
     { id: 'scan', label: 'Scan', icon: '◌', adminOnly: false },
     { id: 'forms', label: 'FORMS', icon: '✎', adminOnly: false },
     { id: 'records', label: 'RECORDS', icon: '☰', adminOnly: false },
+    { id: 'rides', label: 'RIDES (Test Drive)', icon: '🚗', adminOnly: false },
     { id: 'cash', label: 'Cash', icon: '◫', adminOnly: false },
     { id: 'bills', label: 'BILLS / PRINT', icon: '⎙', adminOnly: false },
     { id: 'finance', label: 'Finance (Admin)', icon: '◈', adminOnly: true },
@@ -903,6 +932,30 @@ export default function AdminPage() {
               </div>
             )}
 
+            {tab === 'rides' && (
+              <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-3">
+                <p className="font-black text-xs mb-2">RIDE BOOKINGS / TEST DRIVE ({rides.length})</p>
+                {rides.length === 0 && <p className="text-xs opacity-40 py-4 text-center">Ride booking a awm lo - Customer/website aṭangin booking an input hmain hei hi a lo awm ang.</p>}
+                <div className="divide-y divide-white/5 max-h-[70vh] overflow-auto">
+                  {rides.map((r: any) => (
+                    <div key={r.id} className="py-2 flex justify-between text-xs">
+                      <div>
+                        <p className="font-bold">{r.customer_name || r.name} - {r.model_name || r.model} | {r.ride_date || r.date} {r.ride_time || ''}</p>
+                        <p className="opacity-40 text-[10px]">{r.customer_phone || r.phone} | Status: {r.status || 'pending'}</p>
+                      </div>
+                      <div className="flex gap-1">
+                        <button onClick={async () => {
+                          await getSupabase().from('ride_bookings').update({ status: 'confirmed' }).eq('id', r.id);
+                          load();
+                        }} className="bg-green-600/20 text-green-400 px-2 rounded-full">CONFIRM</button>
+                        <button onClick={() => requestDelete('ride', r.id)} className="bg-red-600/20 text-red-400 px-2 rounded-full">DEL</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {tab === 'forms' && (
               <div className="space-y-3">
                 <div className="flex gap-2 overflow-x-auto pb-2">
@@ -934,6 +987,11 @@ export default function AdminPage() {
                     <div className="grid grid-cols-2 gap-2"><select value={vCat} onChange={(e)=>setVCat(e.target.value)} className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs"><option value="bike">Bike</option><option value="scooty">Scooty</option></select><input value={vModel} onChange={(e)=>setVModel(e.target.value)} placeholder="Model" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /></div>
                     <div className="grid grid-cols-2 gap-2 mt-2"><input value={vChassis} onChange={(e)=>setVChassis(e.target.value)} placeholder="Chassis" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /><input value={vEngine} onChange={(e)=>setVEngine(e.target.value)} placeholder="Engine" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /></div>
                     <div className="grid grid-cols-3 gap-2 mt-2"><input value={vColor} onChange={(e)=>setVColor(e.target.value)} placeholder="Color" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /><input value={vPrice} onChange={(e)=>setVPrice(e.target.value)} type="number" placeholder="Price" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /><input value={vQty} onChange={(e)=>setVQty(e.target.value)} type="number" placeholder="Qty" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /></div>
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <input type="file" accept="image/*" onChange={uploadImage} className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" />
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      {vImage && <img src={vImage} alt="Vehicle preview" className="h-12 w-12 rounded-full object-cover" />}
+                    </div>
                     <button onClick={addVeh} className="w-full mt-3 bg-white text-black py-3 rounded-xl font-black text-xs">ADD VEHICLE</button>
                   </div>
                 )}

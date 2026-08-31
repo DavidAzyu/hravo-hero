@@ -26,6 +26,34 @@
 BEGIN;
 
 -- ----------------------------------------------------------------------------
+-- 0) BOOTSTRAP (safe to run any number of times)
+--    * create the ride_bookings table if it doesn't exist yet
+--    * add image_url to vehicle_inventory if the column is missing
+-- ----------------------------------------------------------------------------
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'ride_bookings') THEN
+    CREATE TABLE public.ride_bookings (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      customer_name text,
+      customer_phone text,
+      phone text,
+      model_name text,
+      ride_date date,
+      ride_time text,
+      status text DEFAULT 'pending',
+      created_at timestamptz DEFAULT now()
+    );
+    RAISE NOTICE 'Created ride_bookings table';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'vehicle_inventory') THEN
+    ALTER TABLE public.vehicle_inventory ADD COLUMN IF NOT EXISTS image_url text;
+    RAISE NOTICE 'Ensured vehicle_inventory.image_url column';
+  END IF;
+END $$;
+
+-- ----------------------------------------------------------------------------
 -- 1) ENABLE ROW LEVEL SECURITY on every table (only if the table exists)
 -- ----------------------------------------------------------------------------
 DO $$
@@ -49,7 +77,8 @@ BEGIN
     'expenses',
     'assets',
     'bills',
-    'parts_inventory'
+    'parts_inventory',
+    'ride_bookings'
   ] LOOP
     IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = t) THEN
       EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
@@ -85,7 +114,8 @@ BEGIN
     'expenses',
     'assets',
     'bills',
-    'parts_inventory'
+    'parts_inventory',
+    'ride_bookings'
   ] LOOP
     IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = t) THEN
       EXECUTE format('DROP POLICY IF EXISTS hravo_anon_select ON public.%I', t);

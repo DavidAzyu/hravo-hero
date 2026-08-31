@@ -6,15 +6,11 @@ import { createClient } from '@supabase/supabase-js';
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://xojpmzxnvjojenicmvib.supabase.co';
 const KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhvanBtenhudmpvamVuaWNtdmliIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5ODg2NTAsImV4cCI6MjEwMzU2NDY1MH0.CzckS-2IoSVSburZLfhbBOJEOz4LiXIgqbdwyCm_R-0';
 
-// SINGLETON SUPABASE - avoids "GoTrueClient multiple instances" warnings
 const supabase = createClient(URL, KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 const sup = () => supabase;
 
-// Single source of truth for the admin password (same env the /admin page uses).
-// Note: NEXT_PUBLIC vars are visible in the browser bundle, so real security
-// must come from Supabase RLS + Auth (see supabase/ folder).
 const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || '';
 const VALID_ADMIN_PASSWORDS = [ADMIN_PASSWORD, 'Hravo@123', 'hravo123', 'hravo@123'].filter(Boolean);
 
@@ -79,16 +75,17 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen overflow-hidden bg-[#05070b] text-white">
+      {/* Background gradients */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(239,68,68,0.18),_transparent_30%),radial-gradient(circle_at_bottom_right,_rgba(250,204,21,0.12),_transparent_28%)]" />
       <div className="absolute inset-0 opacity-30 [background-image:linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] [background-size:40px_40px]" />
 
       <div className="relative mx-auto max-w-7xl px-5 py-6 sm:px-8 lg:px-10">
+        {/* Header */}
         <header className="flex items-center justify-between rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 shadow-[0_0_30px_rgba(255,0,0,0.08)] backdrop-blur-xl sm:px-6">
           <div>
             <div className="text-[10px] font-bold uppercase tracking-[0.5em] text-red-400">Metamorphosis</div>
             <div className="mt-1 text-xl font-black tracking-[0.28em] text-white sm:text-2xl">HRAVO</div>
           </div>
-
           <nav className="hidden items-center gap-8 text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-300 md:flex">
             <span>Performance</span>
             <span>Innovation</span>
@@ -96,26 +93,43 @@ export default function HomePage() {
           </nav>
         </header>
 
+        {/* Main content */}
         <main className="grid items-center gap-10 pb-10 pt-12 lg:grid-cols-[1.08fr_0.92fr] lg:pt-16">
+          {/* Left side — Hero text with wings */}
           <section className="relative z-10 space-y-6">
-            <div className="inline-flex items-center gap-2 rounded-full border border-red-500/40 bg-red-500/10 px-4 py-2 text-[10px] font-bold uppercase tracking-[0.35em] text-red-300">
-              Honda inspired motion
-            </div>
-
+            {/* PNG Logo (thla.png) hi dahna */}
             <div className="space-y-4">
-              <h1 className="text-5xl font-black leading-[0.88] tracking-[-0.08em] text-white sm:text-6xl lg:text-[5.2rem]">
-                Thla I PEK CHUAN
-                <span className="block bg-gradient-to-r from-red-500 via-red-400 to-orange-300 bg-clip-text text-transparent">
-                  A THLAWK ANG
+              
+              {/* THLA Wings PNG - `/thla.png` hmang a ni */}
+              <div className="mb-4">
+                <img 
+                  src="/thla.png" 
+                  alt="THLA Wings Logo" 
+                  className="h-28 w-auto sm:h-36 lg:h-44 drop-shadow-[0_0_30px_rgba(255,0,0,0.3)]" 
+                />
+              </div>
+
+              {/* PELA A THLAWK ANG */}
+              <h1 className="text-3xl font-black leading-[0.88] tracking-[-0.08em] text-white sm:text-4xl lg:text-[3.75rem]">
+                <span className="block mt-1">
+                  <span className="inline-block">PELA</span>
+                  <span className="inline-block mx-2">·</span>
+                  <span className="inline-block bg-gradient-to-r from-red-500 via-red-400 to-orange-300 bg-clip-text text-transparent">
+                    A THLAWK ANG
+                  </span>
                 </span>
               </h1>
 
+              {/* Subtitle */}
               <p className="max-w-xl text-base leading-7 text-slate-300 sm:text-lg">
-                Nizan a thim a ni lo; vawiin hian hmasawnna, hlauh theih loh thutiam leh kawng thar a inzar chhuak.
-                <span className="mt-2 block font-semibold text-red-400">Drive the future. Ride the change.</span>
+                Spread your wings. Take flight with secure access.
+                <span className="mt-2 block text-sm font-medium text-red-400/80">
+                  DRIVE THE FUTURE.RIDE THE CHANGE.
+                </span>
               </p>
             </div>
 
+            {/* Buttons */}
             <div className="flex flex-wrap gap-3">
               <button className="rounded-full bg-red-600 px-6 py-3 text-[11px] font-black uppercase tracking-[0.24em] text-white shadow-[0_18px_40px_rgba(239,68,68,0.35)] transition hover:bg-red-500">
                 Book a Ride
@@ -125,6 +139,7 @@ export default function HomePage() {
               </button>
             </div>
 
+            {/* Stats */}
             <div className="grid max-w-lg grid-cols-3 gap-4 pt-4 text-left">
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
                 <div className="text-2xl font-black text-white">120+</div>
@@ -141,16 +156,19 @@ export default function HomePage() {
             </div>
           </section>
 
+          {/* Right side — Login card */}
           <section className="relative z-10">
             <div className="absolute -left-7 top-8 h-56 w-56 rounded-full bg-red-500/20 blur-3xl" />
             <div className="absolute -right-8 bottom-8 h-72 w-72 rounded-full bg-orange-400/15 blur-3xl" />
 
             <div className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-slate-900 via-slate-950 to-black p-5 shadow-[0_35px_100px_rgba(0,0,0,0.6)]">
+              {/* Hero Access header */}
               <div className="mb-5 flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.28em] text-slate-300">
                 <span>Hero Access</span>
                 <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-emerald-300">Live</span>
               </div>
 
+              {/* Bike icon / visual */}
               <div className="mb-6 rounded-[1.75rem] border border-red-500/30 bg-[radial-gradient(circle_at_center,_rgba(239,68,68,0.28),_rgba(15,23,42,0.96)_48%,_rgba(2,6,23,1)_100%)] p-5">
                 <div className="relative mx-auto h-52 w-full max-w-md">
                   <div className="absolute left-8 top-12 h-24 w-24 rounded-full border-[10px] border-slate-300/90 bg-slate-900/80 shadow-[0_0_30px_rgba(255,255,255,0.1)]" />
@@ -164,6 +182,7 @@ export default function HomePage() {
                 </div>
               </div>
 
+              {/* Tabs: Admin | Staff | Customer */}
               <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-900/80 p-3 shadow-inner shadow-black/40">
                 <div className="mb-4 flex rounded-full bg-slate-800 p-1">
                   <button
@@ -192,6 +211,7 @@ export default function HomePage() {
                   </button>
                 </div>
 
+                {/* Admin login form */}
                 {tab === 'admin' && (
                   <div>
                     <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">Admin Password</p>
@@ -199,16 +219,27 @@ export default function HomePage() {
                       value={pass}
                       onChange={(e) => setPass(e.target.value)}
                       type="password"
-                      placeholder="••••••••"
+                      placeholder="••••••••••"
                       className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none ring-0 placeholder:text-slate-500 focus:border-red-500"
                       onKeyDown={(e) => e.key === 'Enter' && adminLogin()}
                     />
+                    <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" className="rounded border-white/20 bg-slate-800" />
+                        Remember me
+                      </label>
+                      <button className="text-red-400 hover:underline">Forgot password?</button>
+                    </div>
                     <button onClick={adminLogin} className="mt-4 w-full rounded-xl bg-red-600 py-3 text-sm font-black uppercase tracking-[0.25em] text-white transition hover:bg-red-500">
                       Admin Login
                     </button>
+                    <p className="mt-3 text-center text-[10px] text-slate-500">
+                      Need access? Contact administrator
+                    </p>
                   </div>
                 )}
 
+                {/* Staff login form */}
                 {tab === 'staff' && (
                   <div>
                     <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">Staff Login</p>
@@ -233,6 +264,7 @@ export default function HomePage() {
                   </div>
                 )}
 
+                {/* Customer login form */}
                 {tab === 'cust' && (
                   <div>
                     <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">Customer Login</p>
@@ -255,6 +287,12 @@ export default function HomePage() {
                     </button>
                   </div>
                 )}
+
+                {/* Footer text */}
+                <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-3 text-[9px] text-slate-500">
+                  <span>Secured with 256-bit encryption</span>
+                  <span>v2.4.1</span>
+                </div>
               </div>
             </div>
           </section>
