@@ -47,7 +47,16 @@ export default function AdminPage() {
   const [scanning, setScanning] = useState(false);
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const qrRegionId = "qr-reader-full";
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    // Lazy init from localStorage (client-only - SSR gets false and the login
+    // screen shows until the page hydrates).
+    if (typeof window === 'undefined' || !window.localStorage) return false;
+    try {
+      return window.localStorage.getItem('honda_admin_auth') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [passwordInput, setPasswordInput] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<{ tb: string; id: string; } | null>(null);
   const [deletePassword, setDeletePassword] = useState('');
@@ -266,8 +275,9 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    const auth = localStorage.getItem('honda_admin_auth');
-    if (auth === 'true') setIsAuthenticated(true);
+    // Data fetch on mount. load() is async and only calls setState AFTER its
+    // `await ...` calls resolve, so nothing is set synchronously in this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
     return () => {
       if (html5QrCodeRef.current) {

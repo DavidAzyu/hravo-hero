@@ -88,13 +88,12 @@ export default function StaffPage() {
   };
 
   useEffect(() => {
-    if (logged) load();
     return () => {
       if (html5QrCodeRef.current) {
         html5QrCodeRef.current.stop().catch(() => {}).finally(() => html5QrCodeRef.current?.clear());
       }
     };
-  }, [logged]);
+  }, []);
 
   const login = async () => {
     const trimmedPhone = phone.trim();
@@ -138,6 +137,7 @@ export default function StaffPage() {
       setLogged(true);
       setTab('scan');
       setPassword('');
+      await load();
     } catch (err: any) {
       alert('Unexpected error: ' + (err?.message || 'Unknown'));
       console.error('Staff login exception:', err);

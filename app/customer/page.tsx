@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://xojpmzxnvjojenicmvib.supabase.co';
@@ -172,6 +173,9 @@ export default function CustomerPage() {
     const phone = customer?.phone;
     if (!phone) return;
 
+    // QR code generation happens inside the submit handler (not during render).
+    // Date.now is flagged by react-hooks/purity but is safe here.
+    // eslint-disable-next-line react-hooks/purity
     const qrCode = 'HRAVO-SVC-' + Date.now().toString().slice(-6) + '-' + phone.slice(-4);
 
     try {
@@ -500,9 +504,11 @@ export default function CustomerPage() {
                     {bookingSubmitted && bookingQrCode && (
                       <div className="rounded-[1.5rem] border border-emerald-500/30 bg-emerald-500/10 p-4 text-center">
                         <p className="font-black text-xs text-emerald-300 mb-2">Booking Created! Show this QR to service staff</p>
-                        <img
+                        <Image
                           src={bookingQrImage}
                           alt="Service QR"
+                          width={160}
+                          height={160}
                           className="mx-auto w-40 h-40 bg-white p-2 rounded-xl"
                         />
                         <p className="mt-2 font-mono text-[10px] opacity-50">{bookingQrCode}</p>
@@ -542,9 +548,11 @@ export default function CustomerPage() {
                             </div>
                             {service.status !== 'completed' && service.qr_code && (
                               <div className="mt-2 flex items-center gap-2">
-                                <img
+                                <Image
                                   src={`https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=${encodeURIComponent(service.qr_code)}`}
                                   alt="QR"
+                                  width={40}
+                                  height={40}
                                   className="w-10 h-10 bg-white p-1 rounded"
                                 />
                                 <span className="text-[10px] font-mono opacity-40">{service.qr_code}</span>

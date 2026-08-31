@@ -1,5 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
+import Image from 'next/image';
+import Link from 'next/link';
 import { createClient } from '@supabase/supabase-js';
 
 // SINGLETON SUPABASE - avoids "GoTrueClient multiple instances" warnings
@@ -12,11 +14,10 @@ const supabase = createClient(
 export default function QRView({ params }: { params: { code: string } }) {
   const [d, setD] = useState<any>(null);
   const [notFound, setNotFound] = useState(false);
+  const [loadedCode, setLoadedCode] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setD(null);
-    setNotFound(false);
 
     (async () => {
       try {
@@ -26,10 +27,14 @@ export default function QRView({ params }: { params: { code: string } }) {
           .eq('qr_code', params.code)
           .maybeSingle();
         if (cancelled) return;
-        if (!data) setNotFound(true);
-        else setD(data);
+        setLoadedCode(params.code);
+        setD(data ?? null);
+        setNotFound(!data);
       } catch {
-        if (!cancelled) setNotFound(true);
+        if (cancelled) return;
+        setLoadedCode(params.code);
+        setD(null);
+        setNotFound(true);
       }
     })();
 
@@ -37,6 +42,16 @@ export default function QRView({ params }: { params: { code: string } }) {
       cancelled = true;
     };
   }, [params.code]);
+
+  // While the new params.code is being fetched, keep showing a loading screen
+  // even if we still have the previous booking's data in state.
+  if (loadedCode !== params.code) {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+        Loading {params.code}
+      </div>
+    );
+  }
 
   if (notFound) {
     return (
@@ -47,9 +62,9 @@ export default function QRView({ params }: { params: { code: string } }) {
           <p className="mt-2 text-xs">
             Booking QR <b>{params.code}</b> hi hmuh loh. Code dik lo emaw, booking delete/in update a nih thei.
           </p>
-          <a href="/" className="mt-5 inline-block bg-black text-white px-5 py-3 rounded-xl font-black text-xs">
+          <Link href="/" className="mt-5 inline-block bg-black text-white px-5 py-3 rounded-xl font-black text-xs">
             BACK HOME
-          </a>
+          </Link>
         </div>
       </div>
     );
@@ -90,8 +105,10 @@ export default function QRView({ params }: { params: { code: string } }) {
             Rs {d.amount} - {d.service_date}
           </p>
         </div>
-        <img
+        <Image
           src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(d.qr_code)}`}
+          width={300}
+          height={300}
           className="w-56 h-56 mx-auto mt-4 border-2 border-black rounded-xl"
           alt="QR"
         />
