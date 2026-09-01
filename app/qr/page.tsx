@@ -6,17 +6,35 @@ import { createClient } from '@supabase/supabase-js';
 
 // SINGLETON SUPABASE - avoids "GoTrueClient multiple instances" warnings
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://xojpmzxnvjojenicmvib.supabase.co',
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhvanBtenhudmpvamVuaWNtdmliIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5ODg2NTAsImV4cCI6MjEwMzU2NDY1MH0.CzckS-2IoSVSburZLfhbBOJEOz4LiXIgqbdwyCm_R-0',
+  // SECURITY: env-only, no hardcoded fallbacks (set in .env.local / Vercel)
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
   { auth: { persistSession: false, autoRefreshToken: false } }
 );
 
-export default function QRView({ params }: { params: { code: string } }) {
+// output: 'export' (static export) a ni vang, dynamic route /qr/[code] chu
+// build-time ah export theilo (generateStaticParams neilo vang).
+// Chuvangin he page hi static /qr/ route a ni a, booking code hi ?code=
+// query param atanga client-side ah kan read ang.
+//   URL format: /qr/?code=HRAVO-XXXX
+export default function QRView() {
+  const [code, setCode] = useState<string | null>(null);
+  const [noCode, setNoCode] = useState(false);
   const [d, setD] = useState<any>(null);
   const [notFound, setNotFound] = useState(false);
-  const [loadedCode, setLoadedCode] = useState<string | null>(null);
+
+  // Read ?code= from the URL once, on the client
+  useEffect(() => {
+    const c = new URLSearchParams(window.location.search).get('code');
+    if (c) {
+      setCode(c);
+    } else {
+      setNoCode(true);
+    }
+  }, []);
 
   useEffect(() => {
+    if (!code) return;
     let cancelled = false;
 
     (async () => {
@@ -24,15 +42,13 @@ export default function QRView({ params }: { params: { code: string } }) {
         const { data } = await supabase
           .from('service_bookings')
           .select('*')
-          .eq('qr_code', params.code)
+          .eq('qr_code', code)
           .maybeSingle();
         if (cancelled) return;
-        setLoadedCode(params.code);
         setD(data ?? null);
         setNotFound(!data);
       } catch {
         if (cancelled) return;
-        setLoadedCode(params.code);
         setD(null);
         setNotFound(true);
       }
@@ -41,26 +57,22 @@ export default function QRView({ params }: { params: { code: string } }) {
     return () => {
       cancelled = true;
     };
-  }, [params.code]);
+  }, [code]);
 
-  // While the new params.code is being fetched, keep showing a loading screen
-  // even if we still have the previous booking's data in state.
-  if (loadedCode !== params.code) {
-    return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
-        Loading {params.code}
-      </div>
-    );
-  }
-
-  if (notFound) {
+  if (noCode || notFound) {
     return (
       <div className="min-h-screen bg-white text-black p-6 flex flex-col items-center justify-center">
         <div className="w-full max-w-sm border-2 border-black rounded-xl p-5 text-center">
           <div className="bg-black text-white inline-block px-3 py-1 rounded-lg font-black text-xs">HRAVO</div>
           <h1 className="font-black mt-4 text-2xl">NOT FOUND</h1>
           <p className="mt-2 text-xs">
-            Booking QR <b>{params.code}</b> hi hmuh loh. Code dik lo emaw, booking delete/in update a nih thei.
+            {code ? (
+              <>
+                Booking QR <b>{code}</b> hi hmuh loh. Code dik lo emaw, booking delete/in update a nih thei.
+              </>
+            ) : (
+              <>Booking QR code a paih lo. URL hi /qr/?code=BOOKING-CODE a nih ang.</>
+            )}
           </p>
           <Link href="/" className="mt-5 inline-block bg-black text-white px-5 py-3 rounded-xl font-black text-xs">
             BACK HOME
@@ -70,10 +82,10 @@ export default function QRView({ params }: { params: { code: string } }) {
     );
   }
 
-  if (!d) {
+  if (!code || !d) {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
-        Loading {params.code}
+        Loading {code ?? ''}
       </div>
     );
   }

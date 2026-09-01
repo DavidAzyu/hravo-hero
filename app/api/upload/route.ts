@@ -10,13 +10,23 @@ import { NextResponse } from 'next/server';
 //   NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME=tadcjo7u
 //   CLOUDINARY_API_KEY=387554373753717
 //   CLOUDINARY_API_SECRET=...
+// SECURITY: credentials come from env vars only - never hardcoded in source.
+// (The old secret was committed to git history - ROTATE it in the Cloudinary
+// dashboard: Settings > Access Keys > generate new API key, then update .env.local)
 cloudinary.config({
-  cloud_name: process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'tadcjo7u',
-  api_key: process.env.CLOUDINARY_API_KEY || '387554373753717',
-  api_secret: process.env.CLOUDINARY_API_SECRET || 'B8P2hYwttFB28wLV7BdCYCWt1Vs',
+  cloud_name: process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || '',
+  api_key: process.env.CLOUDINARY_API_KEY || '',
+  api_secret: process.env.CLOUDINARY_API_SECRET || '',
 });
 
 export async function POST(req: Request) {
+  if (!process.env.CLOUDINARY_API_SECRET) {
+    return NextResponse.json(
+      { error: 'Upload not configured: CLOUDINARY_API_SECRET env var missing' },
+      { status: 500 }
+    );
+  }
+
   let body: any;
   try {
     body = await req.json();

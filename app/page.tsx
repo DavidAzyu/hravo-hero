@@ -3,32 +3,132 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
-const URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://xojpmzxnvjojenicmvib.supabase.co';
-const KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhvanBtenhudmpvamVuaWNtdmliIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5ODg2NTAsImV4cCI6MjEwMzU2NDY1MH0.CzckS-2IoSVSburZLfhbBOJEOz4LiXIgqbdwyCm_R-0';
+// SECURITY: env-only config - no secrets hardcoded in source.
+// Set NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local (and Vercel).
+const URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
 const supabase = createClient(URL, KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 const sup = () => supabase;
 
+// SECURITY: admin password is verified server-side via the verify_admin_password()
+// RPC (created by supabase/security-hardening.sql) so it never ships in the client
+// bundle. LEGACY_ADMIN_PASSWORD below is only a fallback used until that SQL file
+// is applied - once it is, remove NEXT_PUBLIC_ADMIN_PASSWORD from your env vars.
+const LEGACY_ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || '';
+
+const verifyAdminPassword = async (pw: string): Promise<boolean> => {
+  try {
+    const { data, error } = await sup().rpc('verify_admin_password', { p_password: pw });
+    if (!error) return data === true;
+  } catch {}
+  return LEGACY_ADMIN_PASSWORD !== '' && pw === LEGACY_ADMIN_PASSWORD;
+};
+
 export default function HomePage() {
+  const [tab, setTab] = useState<'admin' | 'staff' | 'cust'>('admin');
+  const [pass, setPass] = useState('');
   const [phone, setPhone] = useState('');
+  const [staffPass, setStaffPass] = useState('');
   const [cPass, setCPass] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  const custLogin = async () => {
+  const adminLogin = async () => {
+    setLoading(true);
+    const ok = await verifyAdminPassword(pass);
+    setLoading(false);
+    if (ok) {
+      localStorage.setItem('honda_admin_auth', 'true');
+      localStorage.setItem('hravo_staff', JSON.stringify({ staff_name: 'Admin', role: 'Admin', isAdmin: true, phone: 'admin' }));
+      router.push('/admin');
+    } else {
+      alert('Password dik lo!');
+    }
+  };
+
+  const staffLogin = async () => {
     const trimmedPhone = phone.trim();
+    const trimmedPass = staffPass.trim();
     if (!trimmedPhone) return alert('Phone dah rawh');
+    setLoading(true);
+
+    // Preferred: server-side verification via RPC - the staff password column is
+    // blocked from public reads by supabase/security-hardening.sql.
+    try {
+      const { data, error } = await sup().rpc('verify_staff_login', { p_phone: trimmedPhone, p_password: trimmedPass });
+      if (!error) {
+        setLoading(false);
+        const res: any = typeof data === 'string' ? JSON.parse(data) : data;
+        if (res?.ok && res.profile) {
+          localStorage.setItem('hravo_staff', JSON.stringify(res.profile));
+          localStorage.setItem('honda_staff', JSON.stringify(res.profile));
+          setStaffPass('');
+          router.push('/staff');
+        } else if (res?.reason === 'bad_pass') {
+          alert('Password dik lo!');
+        } else {
+          alert('Staff hmuh loh! Admin ah add rawh');
+        }
+        return;
+      }
+    } catch {}
+
+    // Legacy fallback (only until supabase/security-hardening.sql is applied)
+    const { data, error } = await sup().from('staff_profiles').select('*').eq('phone', trimmedPhone).maybeSingle();
+    setLoading(false);
+    if (error) {
+      console.error('Staff login error:', error);
+      return alert('Supabase error: ' + error.message);
+    }
+    if (!data) return alert('Staff hmuh loh! Admin ah add rawh');
+
+    const savedPassword = typeof data.password === 'string' ? data.password.trim() : '';
+    if (savedPassword) {
+      if (!trimmedPass) return alert('Staff password dah rawh');
+      if (savedPassword !== trimmedPass) return alert('Password dik lo!');
+    }
+
+    localStorage.setItem('hravo_staff', JSON.stringify(data));
+    localStorage.setItem('honda_staff', JSON.stringify(data));
+    setStaffPass('');
+    router.push('/staff');
+  };
+
+  const custLogin = async () => {
+    if (!phone) return alert('Phone dah rawh');
     if (!cPass) return alert('Password dah rawh');
     setLoading(true);
-    const { data } = await sup().from('customer_profiles').select('*').eq('phone', trimmedPhone).maybeSingle();
+
+    // Preferred: server-side verification via RPC
+    try {
+      const { data, error } = await sup().rpc('verify_customer_login', { p_phone: phone, p_password: cPass });
+      if (!error) {
+        setLoading(false);
+        const res: any = typeof data === 'string' ? JSON.parse(data) : data;
+        if (res?.ok && res.profile) {
+          localStorage.setItem('cust_phone', phone);
+          localStorage.setItem('hravo_customer', JSON.stringify(res.profile));
+          router.push('/customer');
+        } else if (res?.reason === 'bad_pass') {
+          alert('Password dik lo!');
+        } else {
+          alert('Customer hmuh loh!');
+        }
+        return;
+      }
+    } catch {}
+
+    // Legacy fallback (password = last 4 digits of the phone number)
+    const { data } = await sup().from('customer_profiles').select('*').eq('phone', phone).maybeSingle();
     setLoading(false);
     if (!data) return alert('Customer hmuh loh!');
-    if (cPass !== trimmedPhone.slice(-4) && cPass !== '1234' && cPass !== 'honda123' && cPass !== 'Hravo@123') {
+    if (cPass !== phone.slice(-4)) {
       return alert('Password dik lo!');
     }
-    localStorage.setItem('cust_phone', trimmedPhone);
+    localStorage.setItem('cust_phone', phone);
     localStorage.setItem('hravo_customer', JSON.stringify(data));
     router.push('/customer');
   };
@@ -151,37 +251,111 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* Customer login */}
+              {/* Tabs: Admin | Staff | Customer */}
               <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-900/80 p-3 shadow-inner shadow-black/40">
-                <div className="mb-4 flex items-center justify-between rounded-full bg-slate-800 px-4 py-2">
-                  <span className="text-[10px] font-black uppercase tracking-[0.25em] text-white">Customer Access</span>
-                  <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.2em] text-emerald-300">Members</span>
+                <div className="mb-4 flex rounded-full bg-slate-800 p-1">
+                  <button
+                    onClick={() => setTab('admin')}
+                    className={`flex-1 rounded-full px-3 py-2 text-[10px] font-black uppercase tracking-[0.25em] transition ${
+                      tab === 'admin' ? 'bg-red-600 text-white shadow-lg shadow-red-600/25' : 'text-slate-400'
+                    }`}
+                  >
+                    Admin
+                  </button>
+                  <button
+                    onClick={() => setTab('staff')}
+                    className={`flex-1 rounded-full px-3 py-2 text-[10px] font-black uppercase tracking-[0.25em] transition ${
+                      tab === 'staff' ? 'bg-red-600 text-white shadow-lg shadow-red-600/25' : 'text-slate-400'
+                    }`}
+                  >
+                    Staff
+                  </button>
+                  <button
+                    onClick={() => setTab('cust')}
+                    className={`flex-1 rounded-full px-3 py-2 text-[10px] font-black uppercase tracking-[0.25em] transition ${
+                      tab === 'cust' ? 'bg-red-600 text-white shadow-lg shadow-red-600/25' : 'text-slate-400'
+                    }`}
+                  >
+                    Customer
+                  </button>
                 </div>
 
+                {/* Admin login form */}
+                {tab === 'admin' && (
+                  <div>
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">Admin Password</p>
+                    <input
+                      value={pass}
+                      onChange={(e) => setPass(e.target.value)}
+                      type="password"
+                      placeholder="••••••••••"
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none ring-0 placeholder:text-slate-500 focus:border-red-500"
+                      onKeyDown={(e) => e.key === 'Enter' && adminLogin()}
+                    />
+                    <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" className="rounded border-white/20 bg-slate-800" />
+                        Remember me
+                      </label>
+                      <button className="text-red-400 hover:underline">Forgot password?</button>
+                    </div>
+                    <button onClick={adminLogin} className="mt-4 w-full rounded-xl bg-red-600 py-3 text-sm font-black uppercase tracking-[0.25em] text-white transition hover:bg-red-500">
+                      Admin Login
+                    </button>
+                    <p className="mt-3 text-center text-[10px] text-slate-500">
+                      Need access? Contact administrator
+                    </p>
+                  </div>
+                )}
+
+                {/* Staff login form */}
+                {tab === 'staff' && (
+                  <div>
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">Staff Login</p>
+                    <input
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="Phone Number"
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
+                      onKeyDown={(e) => e.key === 'Enter' && staffLogin()}
+                    />
+                    <input
+                      value={staffPass}
+                      onChange={(e) => setStaffPass(e.target.value)}
+                      type="password"
+                      placeholder="Password"
+                      className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
+                      onKeyDown={(e) => e.key === 'Enter' && staffLogin()}
+                    />
+                    <button onClick={staffLogin} className="mt-4 w-full rounded-xl bg-red-600 py-3 text-sm font-black uppercase tracking-[0.25em] text-white transition hover:bg-red-500">
+                      {loading ? 'Checking...' : 'Staff Login'}
+                    </button>
+                  </div>
+                )}
+
                 {/* Customer login form */}
-                <div>
-                  <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">Customer Login</p>
-                  <input
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="Phone Number"
-                    className="mb-2 w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
-                  />
-                  <input
-                    value={cPass}
-                    onChange={(e) => setCPass(e.target.value)}
-                    type="password"
-                    placeholder="Password"
-                    className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
-                    onKeyDown={(e) => e.key === 'Enter' && custLogin()}
-                  />
-                  <button onClick={custLogin} className="mt-4 w-full rounded-xl bg-red-600 py-3 text-sm font-black uppercase tracking-[0.25em] text-white transition hover:bg-red-500">
-                    {loading ? 'Checking...' : 'Customer Login'}
-                  </button>
-                  <p className="mt-3 text-center text-[10px] text-slate-500">
-                    Password hi phone number la hnuhnung ber 4 (last 4 digit) a ni thei. Rilru hlauhchhawn loh chuan dealership hnenah zawng rawh.
-                  </p>
-                </div>
+                {tab === 'cust' && (
+                  <div>
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">Customer Login</p>
+                    <input
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="Phone Number"
+                      className="mb-2 w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
+                    />
+                    <input
+                      value={cPass}
+                      onChange={(e) => setCPass(e.target.value)}
+                      type="password"
+                      placeholder="Password"
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
+                      onKeyDown={(e) => e.key === 'Enter' && custLogin()}
+                    />
+                    <button onClick={custLogin} className="mt-4 w-full rounded-xl bg-red-600 py-3 text-sm font-black uppercase tracking-[0.25em] text-white transition hover:bg-red-500">
+                      {loading ? 'Checking...' : 'Customer Login'}
+                    </button>
+                  </div>
+                )}
 
                 {/* Footer text */}
                 <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-3 text-[9px] text-slate-500">

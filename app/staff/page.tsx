@@ -3,8 +3,9 @@ import { useState, useRef, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Html5Qrcode } from 'html5-qrcode';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://xojpmzxnvjojenicmvib.supabase.co';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhvanBtenhudmpvamVuaWNtdmliIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5ODg2NTAsImV4cCI6MjEwMzU2NDY1MH0.CzckS-2IoSVSburZLfhbBOJEOz4LiXIgqbdwyCm_R-0';
+// SECURITY: env-only, no hardcoded fallbacks (set in .env.local / Vercel)
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 // SINGLETON SUPABASE - avoids "GoTrueClient multiple instances" warnings
 const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -103,6 +104,29 @@ export default function StaffPage() {
       return;
     }
     const sup = getSupabase();
+
+    // Preferred: server-side verification via RPC - the staff password column is
+    // blocked from public reads by supabase/security-hardening.sql.
+    try {
+      const { data, error } = await sup.rpc('verify_staff_login', { p_phone: trimmedPhone, p_password: trimmedPassword });
+      if (!error) {
+        const res: any = typeof data === 'string' ? JSON.parse(data) : data;
+        if (res?.ok && res.profile) {
+          setStaff(res.profile);
+          setLogged(true);
+          setTab('scan');
+          setPassword('');
+          await load();
+        } else if (res?.reason === 'bad_pass') {
+          alert('Password dik lo!');
+        } else {
+          alert('Staff hmuh loh - Phone: ' + trimmedPhone + ' check rawh');
+        }
+        return;
+      }
+    } catch {}
+
+    // Legacy fallback (only until supabase/security-hardening.sql is applied)
     try {
       const { data, error } = await sup
         .from('staff_profiles')

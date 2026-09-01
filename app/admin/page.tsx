@@ -4,14 +4,27 @@ import { createClient as SC } from '@supabase/supabase-js';
 import { Html5Qrcode } from 'html5-qrcode';
 
 // SINGLETON SUPABASE - fixes GoTrueClient multiple instances warning
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://xojpmzxnvjojenicmvib.supabase.co';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhvanBtenhudmpvamVuaWNtdmliIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5ODg2NTAsImV4cCI6MjEwMzU2NDY1MH0.CzckS-2IoSVSburZLfhbBOJEOz4LiXIgqbdwyCm_R-0';
+// SECURITY: env-only, no hardcoded fallbacks (set in .env.local / Vercel)
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = SC(supabaseUrl, supabaseKey, {
   auth: { persistSession: false, autoRefreshToken: false }
 });
 const getSupabase = () => supabase;
 
-const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || 'hravo123';
+// SECURITY: no hardcoded password fallback. Admin password is verified
+// server-side via verify_admin_password() RPC (supabase/security-hardening.sql).
+// ADMIN_PASSWORD env var is only the legacy fallback until the SQL is applied -
+// remove NEXT_PUBLIC_ADMIN_PASSWORD from env vars once the SQL is live.
+const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || '';
+
+const verifyAdminPassword = async (pw: string): Promise<boolean> => {
+  try {
+    const { data, error } = await supabase.rpc('verify_admin_password', { p_password: pw });
+    if (!error) return data === true;
+  } catch {}
+  return ADMIN_PASSWORD !== '' && pw === ADMIN_PASSWORD;
+};
 
 const readLocalList = (key: string, fallback: any[] = []) => {
   try {
@@ -238,7 +251,8 @@ export default function AdminPage() {
     }
 
     try {
-      const d = await sup.from('staff_profiles').select('*').order('created_at', { ascending: false });
+      // SECURITY: password column is not publicly readable after security-hardening.sql
+      const d = await sup.from('staff_profiles').select('id, staff_name, phone, role, salary, address, created_at').order('created_at', { ascending: false });
       if (d.data) {
         setStaff(d.data);
         writeLocalList('hravo_staff_profiles', d.data);
@@ -293,8 +307,8 @@ export default function AdminPage() {
     }
   }, []);
 
-  const handleLogin = () => {
-    if (passwordInput === ADMIN_PASSWORD) {
+  const handleLogin = async () => {
+    if (await verifyAdminPassword(passwordInput)) {
       setIsAuthenticated(true);
       localStorage.setItem('honda_admin_auth', 'true');
       setPasswordInput('');
@@ -513,10 +527,12 @@ export default function AdminPage() {
       password: password,
     };
     try {
-      let { data, error } = await sup.from('staff_profiles').insert([payload]).select();
+      // NOTE: no .select() after insert - the password column is blocked from
+      // public reads by supabase/security-hardening.sql, so RETURNING * would fail.
+      let { data, error } = await sup.from('staff_profiles').insert([payload]);
       if (error && error.message.includes('password')) {
         const { password: _p, ...noPassPayload } = payload;
-        const retry = await sup.from('staff_profiles').insert([noPassPayload]).select();
+        const retry = await sup.from('staff_profiles').insert([noPassPayload]);
         data = retry.data;
         error = retry.error;
       }
@@ -564,7 +580,7 @@ export default function AdminPage() {
     const { error } = await sup.from('service_bookings').insert([{ customer_name: svName, phone: svPhone, model_name: svModel, chassis_no: svChassis, service_type: svType, service_date: svDate || new Date().toISOString().split('T')[0], amount: Number(svAmt || 500), status: 'pending', qr_code: qrCode }]);
     if (error) { alert(error.message); return; }
     setSvName(''); setSvPhone(''); setSvModel(''); setSvChassis(''); load();
-    const url = `${window.location.origin}/qr/${qrCode}`;
+    const url = `${window.location.origin}/qr/?code=${encodeURIComponent(qrCode)}`;
     window.open(url, '_blank');
     alert('BOOKED - QR Tab thar hawng: ' + qrCode);
   };
@@ -590,7 +606,7 @@ export default function AdminPage() {
 
     const financeDeleteKeys = ['finance_journal', 'capital', 'loan', 'loan_payment', 'vendor_payable', 'expense', 'asset'];
     const isFinanceDelete = financeDeleteKeys.includes(showDeleteConfirm.tb);
-    if (!isFinanceDelete && deletePassword !== ADMIN_PASSWORD) {
+    if (!isFinanceDelete && !(await verifyAdminPassword(deletePassword))) {
       alert('Password dik lo!');
       return;
     }
@@ -624,8 +640,8 @@ export default function AdminPage() {
     setShowDeleteConfirm(null); setDeletePassword(''); load();
   };
 
-  const unlockSettings = () => {
-    if (settingsPass === ADMIN_PASSWORD) {
+  const unlockSettings = async () => {
+    if (await verifyAdminPassword(settingsPass)) {
       setSettingsUnlocked(true);
       setSettingsPass('');
     } else {
@@ -1101,7 +1117,7 @@ export default function AdminPage() {
                       {staff.map((s:any)=>(
                         <div key={s.id} className="py-2 flex justify-between text-xs items-center"><div><p className="font-bold">{s.staff_name} - {s.role} | Rs {s.salary}</p><p className="opacity-40 text-[10px]">{s.phone} | {s.address} | {new Date(s.created_at).toLocaleString()}</p></div><div className="flex gap-1"><button onClick={()=>setShowStaffPass(showStaffPass===s.id? null : s.id)} className="bg-white/10 px-2 rounded-full">PASS</button><button onClick={()=>requestDelete('staff', s.id)} className="bg-red-600/20 text-red-400 px-2 rounded-full">DEL</button></div></div>
                       ))}
-                      {showStaffPass && staff.find((s:any)=>s.id===showStaffPass) && <p className="text-green-400 text-[10px] mt-2">Password: {staff.find((s:any)=>s.id===showStaffPass).password}</p>}
+                      {showStaffPass && staff.find((s:any)=>s.id===showStaffPass) && <p className="text-green-400 text-[10px] mt-2">Password: {staff.find((s:any)=>s.id===showStaffPass).password || '(hidden - secure, run supabase/security-hardening.sql for server-side login)'}</p>}
                     </div>
                   </div>
                 )}
