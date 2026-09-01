@@ -169,16 +169,19 @@ export default function HomePage() {
                 />
               </div>
 
-              {/* PELA A THLAWK ANG */}
+              {/* 🔽 UPDATED HEADING – OPTION 2 🔽 */}
               <h1 className="text-3xl font-black leading-[0.88] tracking-[-0.08em] text-white sm:text-4xl lg:text-[3.75rem]">
                 <span className="block mt-1">
                   <span className="inline-block">PELA</span>
-                  <span className="inline-block mx-2">·</span>
-                  <span className="inline-block bg-gradient-to-r from-red-500 via-red-400 to-orange-300 bg-clip-text text-transparent">
-                    A THLAWK ANG
-                  </span>
+                  <span className="inline-block mx-2 text-white">·</span>
+                  <span className="inline-block text-red-500">A</span>
+                  <span className="inline-block mx-2 text-white">·</span>
+                  <span className="inline-block bg-gradient-to-r from-red-500 via-red-400 to-orange-300 bg-clip-text text-transparent">THLAWK</span>
+                  <span className="inline-block mx-2 text-white">·</span>
+                  <span className="inline-block bg-gradient-to-r from-red-500 via-red-400 to-orange-300 bg-clip-text text-transparent">ANG</span>
                 </span>
               </h1>
+              {/* 🔼 END UPDATED HEADING 🔼 */}
 
               {/* Subtitle - HRAVO HERO mawi deuh (Option 1) */}
               <p className="relative max-w-xl text-base leading-7 sm:text-lg">
