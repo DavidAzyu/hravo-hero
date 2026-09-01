@@ -11,64 +11,24 @@ const supabase = createClient(URL, KEY, {
 });
 const sup = () => supabase;
 
-const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || '';
-const VALID_ADMIN_PASSWORDS = [ADMIN_PASSWORD, 'Hravo@123', 'hravo123', 'hravo@123'].filter(Boolean);
-
 export default function HomePage() {
-  const [tab, setTab] = useState<'admin' | 'staff' | 'cust'>('admin');
-  const [pass, setPass] = useState('');
   const [phone, setPhone] = useState('');
-  const [staffPass, setStaffPass] = useState('');
   const [cPass, setCPass] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  const adminLogin = () => {
-    if (VALID_ADMIN_PASSWORDS.includes(pass)) {
-      localStorage.setItem('honda_admin_auth', 'true');
-      localStorage.setItem('hravo_staff', JSON.stringify({ staff_name: 'Admin', role: 'Admin', isAdmin: true, phone: 'admin' }));
-      router.push('/admin');
-    } else {
-      alert('Password dik lo!');
-    }
-  };
-
-  const staffLogin = async () => {
-    const trimmedPhone = phone.trim();
-    const trimmedPass = staffPass.trim();
-    if (!trimmedPhone) return alert('Phone dah rawh');
-    setLoading(true);
-    const { data, error } = await sup().from('staff_profiles').select('*').eq('phone', trimmedPhone).maybeSingle();
-    setLoading(false);
-    if (error) {
-      console.error('Staff login error:', error);
-      return alert('Supabase error: ' + error.message);
-    }
-    if (!data) return alert('Staff hmuh loh! Admin ah add rawh');
-
-    const savedPassword = typeof data.password === 'string' ? data.password.trim() : '';
-    if (savedPassword) {
-      if (!trimmedPass) return alert('Staff password dah rawh');
-      if (savedPassword !== trimmedPass) return alert('Password dik lo!');
-    }
-
-    localStorage.setItem('hravo_staff', JSON.stringify(data));
-    localStorage.setItem('honda_staff', JSON.stringify(data));
-    setStaffPass('');
-    router.push('/staff');
-  };
-
   const custLogin = async () => {
-    if (!phone) return alert('Phone dah rawh');
+    const trimmedPhone = phone.trim();
+    if (!trimmedPhone) return alert('Phone dah rawh');
     if (!cPass) return alert('Password dah rawh');
     setLoading(true);
-    const { data } = await sup().from('customer_profiles').select('*').eq('phone', phone).maybeSingle();
+    const { data } = await sup().from('customer_profiles').select('*').eq('phone', trimmedPhone).maybeSingle();
     setLoading(false);
     if (!data) return alert('Customer hmuh loh!');
-    if (cPass !== phone.slice(-4) && cPass !== '1234' && cPass !== 'honda123' && cPass !== 'Hravo@123') {
+    if (cPass !== trimmedPhone.slice(-4) && cPass !== '1234' && cPass !== 'honda123' && cPass !== 'Hravo@123') {
       return alert('Password dik lo!');
     }
-    localStorage.setItem('cust_phone', phone);
+    localStorage.setItem('cust_phone', trimmedPhone);
     localStorage.setItem('hravo_customer', JSON.stringify(data));
     router.push('/customer');
   };
@@ -120,11 +80,14 @@ export default function HomePage() {
                 </span>
               </h1>
 
-              {/* Subtitle */}
-              <p className="max-w-xl text-base leading-7 text-slate-300 sm:text-lg">
-                Spread your wings. Take flight with secure access.
-                <span className="mt-2 block text-sm font-medium text-red-400/80">
-                  DRIVE THE FUTURE.RIDE THE CHANGE.
+              {/* Subtitle - HRAVO HERO mawi deuh (Option 1) */}
+              <p className="relative max-w-xl text-base leading-7 sm:text-lg">
+                <span className="inline-block bg-gradient-to-r from-red-400 via-orange-300 to-yellow-200 bg-clip-text text-2xl font-black uppercase tracking-[0.35em] text-transparent sm:text-3xl">
+                  HRAVO HERO
+                </span>
+                <span className="absolute -bottom-1 left-0 h-[2px] w-24 rounded-full bg-gradient-to-r from-red-500 to-orange-400 shadow-[0_0_20px_rgba(239,68,68,0.6)]" />
+                <span className="mt-3 block text-sm font-medium text-red-400/80">
+                  DRIVE THE FUTURE · RIDE THE CHANGE.
                 </span>
               </p>
             </div>
@@ -188,111 +151,37 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* Tabs: Admin | Staff | Customer */}
+              {/* Customer login */}
               <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-900/80 p-3 shadow-inner shadow-black/40">
-                <div className="mb-4 flex rounded-full bg-slate-800 p-1">
-                  <button
-                    onClick={() => setTab('admin')}
-                    className={`flex-1 rounded-full px-3 py-2 text-[10px] font-black uppercase tracking-[0.25em] transition ${
-                      tab === 'admin' ? 'bg-red-600 text-white shadow-lg shadow-red-600/25' : 'text-slate-400'
-                    }`}
-                  >
-                    Admin
-                  </button>
-                  <button
-                    onClick={() => setTab('staff')}
-                    className={`flex-1 rounded-full px-3 py-2 text-[10px] font-black uppercase tracking-[0.25em] transition ${
-                      tab === 'staff' ? 'bg-red-600 text-white shadow-lg shadow-red-600/25' : 'text-slate-400'
-                    }`}
-                  >
-                    Staff
-                  </button>
-                  <button
-                    onClick={() => setTab('cust')}
-                    className={`flex-1 rounded-full px-3 py-2 text-[10px] font-black uppercase tracking-[0.25em] transition ${
-                      tab === 'cust' ? 'bg-red-600 text-white shadow-lg shadow-red-600/25' : 'text-slate-400'
-                    }`}
-                  >
-                    Customer
-                  </button>
+                <div className="mb-4 flex items-center justify-between rounded-full bg-slate-800 px-4 py-2">
+                  <span className="text-[10px] font-black uppercase tracking-[0.25em] text-white">Customer Access</span>
+                  <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.2em] text-emerald-300">Members</span>
                 </div>
 
-                {/* Admin login form */}
-                {tab === 'admin' && (
-                  <div>
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">Admin Password</p>
-                    <input
-                      value={pass}
-                      onChange={(e) => setPass(e.target.value)}
-                      type="password"
-                      placeholder="••••••••••"
-                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none ring-0 placeholder:text-slate-500 focus:border-red-500"
-                      onKeyDown={(e) => e.key === 'Enter' && adminLogin()}
-                    />
-                    <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
-                      <label className="flex items-center gap-2">
-                        <input type="checkbox" className="rounded border-white/20 bg-slate-800" />
-                        Remember me
-                      </label>
-                      <button className="text-red-400 hover:underline">Forgot password?</button>
-                    </div>
-                    <button onClick={adminLogin} className="mt-4 w-full rounded-xl bg-red-600 py-3 text-sm font-black uppercase tracking-[0.25em] text-white transition hover:bg-red-500">
-                      Admin Login
-                    </button>
-                    <p className="mt-3 text-center text-[10px] text-slate-500">
-                      Need access? Contact administrator
-                    </p>
-                  </div>
-                )}
-
-                {/* Staff login form */}
-                {tab === 'staff' && (
-                  <div>
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">Staff Login</p>
-                    <input
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      placeholder="Phone Number"
-                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
-                      onKeyDown={(e) => e.key === 'Enter' && staffLogin()}
-                    />
-                    <input
-                      value={staffPass}
-                      onChange={(e) => setStaffPass(e.target.value)}
-                      type="password"
-                      placeholder="Password"
-                      className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
-                      onKeyDown={(e) => e.key === 'Enter' && staffLogin()}
-                    />
-                    <button onClick={staffLogin} className="mt-4 w-full rounded-xl bg-red-600 py-3 text-sm font-black uppercase tracking-[0.25em] text-white transition hover:bg-red-500">
-                      {loading ? 'Checking...' : 'Staff Login'}
-                    </button>
-                  </div>
-                )}
-
                 {/* Customer login form */}
-                {tab === 'cust' && (
-                  <div>
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">Customer Login</p>
-                    <input
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      placeholder="Phone Number"
-                      className="mb-2 w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
-                    />
-                    <input
-                      value={cPass}
-                      onChange={(e) => setCPass(e.target.value)}
-                      type="password"
-                      placeholder="Password"
-                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
-                      onKeyDown={(e) => e.key === 'Enter' && custLogin()}
-                    />
-                    <button onClick={custLogin} className="mt-4 w-full rounded-xl bg-red-600 py-3 text-sm font-black uppercase tracking-[0.25em] text-white transition hover:bg-red-500">
-                      {loading ? 'Checking...' : 'Customer Login'}
-                    </button>
-                  </div>
-                )}
+                <div>
+                  <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">Customer Login</p>
+                  <input
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="Phone Number"
+                    className="mb-2 w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
+                  />
+                  <input
+                    value={cPass}
+                    onChange={(e) => setCPass(e.target.value)}
+                    type="password"
+                    placeholder="Password"
+                    className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm font-semibold text-white outline-none placeholder:text-slate-500 focus:border-red-500"
+                    onKeyDown={(e) => e.key === 'Enter' && custLogin()}
+                  />
+                  <button onClick={custLogin} className="mt-4 w-full rounded-xl bg-red-600 py-3 text-sm font-black uppercase tracking-[0.25em] text-white transition hover:bg-red-500">
+                    {loading ? 'Checking...' : 'Customer Login'}
+                  </button>
+                  <p className="mt-3 text-center text-[10px] text-slate-500">
+                    Password hi phone number la hnuhnung ber 4 (last 4 digit) a ni thei. Rilru hlauhchhawn loh chuan dealership hnenah zawng rawh.
+                  </p>
+                </div>
 
                 {/* Footer text */}
                 <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-3 text-[9px] text-slate-500">
