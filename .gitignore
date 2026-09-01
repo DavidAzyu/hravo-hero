@@ -3,4 +3,22 @@
 .env.local
 .env*.local
 vercel.json
-node_modules
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# next.js
+/.next/
+/out/
+
+# testing
+/coverage
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
