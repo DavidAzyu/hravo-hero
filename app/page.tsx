@@ -131,10 +131,16 @@ export default function HomePage() {
 
             {/* Buttons */}
             <div className="flex flex-wrap gap-3">
-              <button className="rounded-full bg-red-600 px-6 py-3 text-[11px] font-black uppercase tracking-[0.24em] text-white shadow-[0_18px_40px_rgba(239,68,68,0.35)] transition hover:bg-red-500">
+              <button
+                onClick={() => router.push('/book')}
+                className="rounded-full bg-red-600 px-6 py-3 text-[11px] font-black uppercase tracking-[0.24em] text-white shadow-[0_18px_40px_rgba(239,68,68,0.35)] transition hover:bg-red-500"
+              >
                 Book a Ride
               </button>
-              <button className="rounded-full border border-white/15 bg-white/5 px-6 py-3 text-[11px] font-black uppercase tracking-[0.24em] text-slate-200 transition hover:border-red-400 hover:text-red-200">
+              <button
+                onClick={() => router.push('/models')}
+                className="rounded-full border border-white/15 bg-white/5 px-6 py-3 text-[11px] font-black uppercase tracking-[0.24em] text-slate-200 transition hover:border-red-400 hover:text-red-200"
+              >
                 Explore Models
               </button>
             </div>
