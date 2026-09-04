@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { createClient as SC } from '@supabase/supabase-js';
 import { Html5Qrcode } from 'html5-qrcode';
+import jsQR from 'jsqr'; // Added for static QR detection
 
 // SINGLETON SUPABASE - fixes GoTrueClient multiple instances warning
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -308,7 +309,7 @@ export default function AdminPage() {
     }
   }, []);
 
-  // INIT OCR WORKER
+  // INIT OCR WORKER (Modified for Hero labels)
   useEffect(() => {
     const initWorker = async () => {
       try {
@@ -316,9 +317,9 @@ export default function AdminPage() {
         const worker = await createWorker('eng', 1, {
           logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); }
         });
+        // Fixed: Sparse text mode (11) and removed whitelist to prevent cutting numbers
         await worker.setParameters({
-          tessedit_pageseg_mode: 6 as any,
-          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-₹. '
+          tessedit_pageseg_mode: '11' as any
         });
         ocrWorkerRef.current = worker;
         setOcrReady(true);
@@ -348,34 +349,51 @@ export default function AdminPage() {
     stopCam();
   };
 
+  // Fixed parseHondaQR with OCR misread fixes (J -> 3, I -> 1, O -> 0) 
   const parseHondaQR = (val: string) => {
-    const clean = val.replace(/\n/g, ' ').replace(/\s+/g, ' ').toUpperCase();
+    let clean = val.replace(/\n/g, ' ').replace(/\s+/g, ' ').toUpperCase();
+    
+    // OCR misread fix: J->3, I->1, O->0 (J1600 -> 31600)
+    clean = clean.replace(/\bJ(?=\d)/g, '3'); 
+    clean = clean.replace(/\bI(?=\d)/g, '1');
+    clean = clean.replace(/\bO(?=\d)/g, '0');
+
+    // Remove garbage words
     const garbage = ['AL', 'ETC', 'LL', 'TT'];
     let filtered = clean;
     garbage.forEach(g => { filtered = filtered.replace(new RegExp(`\\b${g}\\b`, 'g'), '') });
-    // Improved part number extraction
+
+    // Extract part number (relaxed regex to allow letters like J)
     let codeMatch = filtered.match(/(\d{5}[A-Z0-9\-]{4,})/) 
       || filtered.match(/(\d{5}[A-Z]{2,5}\d*[A-Z0-9-]*)/)
       || filtered.match(/(9\d{4}[A-Z0-9\-]+)/)
-      || filtered.match(/(\d{5,12})/);
+      || filtered.match(/(\d{5,12})/)
+      || filtered.match(/([A-Z0-9]{10,15})/); // Catchall for alphanumeric strings
+
     const mrpMatch = filtered.match(/₹\s*([\d,]+\.?\d*)/) || filtered.match(/MRP[^0-9]*([\d,]+\.?\d*)/i) || filtered.match(/(\d{3,5}\.00)/);
     const qtyMatch = filtered.match(/QUANTITY:\s*(\d+)/i) || filtered.match(/QTY\s*(\d+)/i);
+
+    // Extract name - Strictly avoid garbled OCR (e.g. SEETELT RET)
     let name = '';
     if (filtered.includes('REGULATOR')) name = 'REGULATOR RECTIFIER COMPLETE';
     else if (filtered.includes('SEAL OIL')) name = 'SEAL OIL';
     else if (filtered.includes('AIR FILTER')) name = 'AIR FILTER';
     else if (filtered.includes('BRAKE SHOE')) name = 'BRAKE SHOE';
     else if (filtered.includes('SPARK PLUG')) name = 'SPARK PLUG';
-    else {
-      const m = filtered.match(/(?:\d{5}[A-Z0-9-]+)\s+([A-Z ]{5,40}?)(?:\s+MFD|\s+MFG|\s+MRP|\s+NET)/);
-      if (m) name = m[1].trim();
+    else name = 'GENUINE PART'; // Clean name so user can type it manually
+
+    // Fix code: if codeMatch is undefined, try to use clean.slice but limit it
+    let code = codeMatch?.[1]?.replace(/\s/g,'') || '';
+    if (!code) {
+       const match = clean.match(/[A-Z0-9]{8,}/);
+       code = match ? match[0] : clean.slice(0, 16);
     }
-    if (name.length < 4) name = 'GENUINE PART';
+
     return {
-      name: name || (codeMatch? codeMatch[1] : clean.slice(0, 25)),
+      name: name,
       price: mrpMatch? mrpMatch[1].replace(/,/g,'') : '',
       qty: qtyMatch? qtyMatch[1] : '1',
-      code: codeMatch?.[1]?.replace(/\s/g,'') || clean.slice(0, 16)
+      code: code
     };
   };
 
@@ -395,10 +413,11 @@ export default function AdminPage() {
     setScanStatus(`Part: ${parsed.code} - ${parsed.name} - ₹${parsed.price}`);
   };
 
-  // Modified preprocessing: full image, no crop, improved threshold
+  // Fixed: Grayscale threshold for Hero labels (white background, black/red text)
   const preprocessCanvas = (sourceCanvas: HTMLCanvasElement) => {
     const out = document.createElement('canvas');
-    const maxDimension = 1200;
+    // Fixed: Increased resolution from 1200 to 2400 to improve small text
+    const maxDimension = 2400;
     let scale = 1;
     if (sourceCanvas.width > maxDimension || sourceCanvas.height > maxDimension) {
       scale = maxDimension / Math.max(sourceCanvas.width, sourceCanvas.height);
@@ -410,14 +429,29 @@ export default function AdminPage() {
     ctx.drawImage(sourceCanvas, 0, 0, out.width, out.height);
     const imageData = ctx.getImageData(0, 0, out.width, out.height);
     const data = imageData.data;
+    // Fixed: Convert to grayscale for high contrast
     for (let i = 0; i < data.length; i += 4) {
-      const blue = data[i+2];
-      const avg = (data[i] + data[i+1] + data[i+2]) / 3;
-      const v = (blue > 100 && avg > 70)? 255 : 0;
+      const r = data[i];
+      const g = data[i+1];
+      const b = data[i+2];
+      const gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const v = gray > 128 ? 255 : 0;
       data[i] = data[i+1] = data[i+2] = v;
     }
     ctx.putImageData(imageData, 0, 0);
     return out;
+  };
+
+  // New: Helper to rotate canvas by 180 degrees (fixes upside down images)
+  const rotateCanvas = (canvas: HTMLCanvasElement, angle: number) => {
+    const newCanvas = document.createElement('canvas');
+    newCanvas.width = canvas.width;
+    newCanvas.height = canvas.height;
+    const ctx = newCanvas.getContext('2d')!;
+    ctx.translate(newCanvas.width / 2, newCanvas.height / 2);
+    ctx.rotate(angle * Math.PI / 180);
+    ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+    return newCanvas;
   };
 
   const runOcrOnImage = async (imageSource: any) => {
@@ -433,15 +467,43 @@ export default function AdminPage() {
         const img = new Image();
         const url = URL.createObjectURL(imageSource);
         await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+
+        // NEW: Check for QR code in the uploaded file FIRST
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = img.width; tempCanvas.height = img.height;
+        const tctx = tempCanvas.getContext('2d')!;
+        tctx.drawImage(img, 0, 0);
+        const imageData = tctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+        const qrCode = jsQR(imageData.data, imageData.width, imageData.height);
+
+        if (qrCode && qrCode.data) {
+          // QR awm ta - a data hmang lawk rawh, OCR skip
+          URL.revokeObjectURL(url);
+          handleQrSuccess(qrCode.data);
+          return; // finally block will setOcrLoading(false)
+        }
+        URL.revokeObjectURL(url);
+
         baseCanvas = document.createElement('canvas');
-        const maxW = 900;
+        const maxW = 1400; // Increased slightly for better file OCR
         const sc = Math.min(1, maxW / img.width);
         baseCanvas.width = img.width * sc; baseCanvas.height = img.height * sc;
         baseCanvas.getContext('2d')!.drawImage(img, 0, 0, baseCanvas.width, baseCanvas.height);
-        URL.revokeObjectURL(url);
       } else { baseCanvas = imageSource; }
+      
       const processed = preprocessCanvas(baseCanvas);
-      const { data: { text } } = await ocrWorkerRef.current.recognize(processed);
+      let { data: { text, confidence } } = await ocrWorkerRef.current.recognize(processed);
+
+      // Fixed: Check if image is upside down (confidence low), try rotating 180
+      if (confidence < 60) {
+        const rotated = rotateCanvas(processed, 180);
+        const res2 = await ocrWorkerRef.current.recognize(rotated);
+        if (res2.data.confidence > confidence) {
+          text = res2.data.text;
+          confidence = res2.data.confidence;
+        }
+      }
+
       const cleaned = text.toUpperCase();
       setOcrText(cleaned);
       if (cleaned.trim().length > 5) applyParsedPart(cleaned);
@@ -454,7 +516,20 @@ export default function AdminPage() {
     if (!video) { alert('Camera on hmasa rawh'); return; }
     const canvas = canvasRef.current!;
     canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-    canvas.getContext('2d')!.drawImage(video, 0, 0);
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(video, 0, 0);
+    
+    // NEW: Try to decode QR from the captured frame first
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const qrCode = jsQR(imageData.data, imageData.width, imageData.height);
+    
+    if (qrCode && qrCode.data) {
+      // QR awm ta - a data hmang lawk rawh, OCR skip
+      handleQrSuccess(qrCode.data);
+      return;
+    }
+
+    // QR awm loh chuan normal OCR a kal zel ang
     await runOcrOnImage(canvas);
   };
 
@@ -1094,7 +1169,7 @@ export default function AdminPage() {
             {tab === 'scan' && (
               <div className="space-y-3">
                 <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4">
-                  <p className="font-black text-xs mb-3">SCAN QR + OCR (Honda Label)</p>
+                  <p className="font-black text-xs mb-3">SCAN QR + OCR (Hero Label)</p>
                   <div id={qrRegionId} className="rounded-xl overflow-hidden bg-black/50 min-h-[200px]"></div>
                   <div className="flex gap-2 mt-3">
                     <button onClick={()=>startCam('in')} className="flex-1 bg-white text-black py-2 rounded-xl font-black text-xs">SCAN IN</button>

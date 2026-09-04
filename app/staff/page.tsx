@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Html5Qrcode } from 'html5-qrcode';
+import jsQR from 'jsqr'; // Added for static QR detection
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -99,7 +100,6 @@ export default function StaffPage() {
         const worker = await createWorker('eng', 1, {
           logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); }
         });
-        // Fixed: Sparse text mode (11) and removed whitelist to prevent cutting numbers
         await worker.setParameters({
           tessedit_pageseg_mode: '11' as any
         });
@@ -216,7 +216,6 @@ export default function StaffPage() {
 
     if (mode === 'service') {
       if (!canCompleteService &&!canViewService) { alert('Service hmu thei lo'); isProcessingRef.current = false; return; }
-      // Direct DB query, no state search
       const { data, error } = await sup.from('service_bookings').select('*').eq('qr_code', cleanCode).maybeSingle();
       if (error) { alert('Service lookup error'); isProcessingRef.current = false; return; }
       if (data) {
@@ -250,7 +249,6 @@ export default function StaffPage() {
           setTimeout(()=>{ isProcessingRef.current = false; }, 2000);
           return;
         }
-        // Not in DB -> treat as new, parse full raw text if available
         const parsed = parseHondaQR(code);
         setPendingPart({ code: cleanCode, name: parsed.name!== 'GENUINE PART'? parsed.name : 'GENUINE PART', price: parsed.price || '150', qty: '1' });
         setPName(parsed.name!== 'GENUINE PART'? parsed.name : '');
@@ -266,7 +264,6 @@ export default function StaffPage() {
   // Fixed: Grayscale threshold for Hero labels (white background, black/red text)
   const preprocessCanvas = (sourceCanvas: HTMLCanvasElement) => {
     const out = document.createElement('canvas');
-    // Fixed: Increased resolution from 1200 to 2400 to improve small text
     const maxDimension = 2400;
     let scale = 1;
     if (sourceCanvas.width > maxDimension || sourceCanvas.height > maxDimension) {
@@ -279,7 +276,7 @@ export default function StaffPage() {
     ctx.drawImage(sourceCanvas, 0, 0, out.width, out.height);
     const imageData = ctx.getImageData(0, 0, out.width, out.height);
     const data = imageData.data;
-    // Fixed: Convert to grayscale for high contrast (Hero has white/red background, black text)
+    // Fixed: Convert to grayscale for high contrast
     for (let i = 0; i < data.length; i += 4) {
       const r = data[i];
       const g = data[i+1];
@@ -292,7 +289,6 @@ export default function StaffPage() {
     return out;
   };
 
-  // New: Helper to rotate canvas by 180 degrees (fixes upside down images)
   const rotateCanvas = (canvas: HTMLCanvasElement, angle: number) => {
     const newCanvas = document.createElement('canvas');
     newCanvas.width = canvas.width;
@@ -317,18 +313,33 @@ export default function StaffPage() {
         const img = new Image();
         const url = URL.createObjectURL(imageSource);
         await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+
+        // NEW: Check for QR code in the uploaded file FIRST
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = img.width; tempCanvas.height = img.height;
+        const tctx = tempCanvas.getContext('2d')!;
+        tctx.drawImage(img, 0, 0);
+        const imageData = tctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+        const qrCode = jsQR(imageData.data, imageData.width, imageData.height);
+
+        if (qrCode && qrCode.data) {
+          // QR awm ta - a data hmang lawk rawh, OCR skip
+          URL.revokeObjectURL(url);
+          handleQr(qrCode.data);
+          return; // finally block will setOcrLoading(false)
+        }
+        URL.revokeObjectURL(url);
+
         baseCanvas = document.createElement('canvas');
-        const maxW = 1400; // Increased slightly for better file OCR
+        const maxW = 1400; 
         const sc = Math.min(1, maxW / img.width);
         baseCanvas.width = img.width * sc; baseCanvas.height = img.height * sc;
         baseCanvas.getContext('2d')!.drawImage(img, 0, 0, baseCanvas.width, baseCanvas.height);
-        URL.revokeObjectURL(url);
       } else { baseCanvas = imageSource; }
       
       const processed = preprocessCanvas(baseCanvas);
       let { data: { text, confidence } } = await ocrWorkerRef.current.recognize(processed);
 
-      // Fixed: Check if image is upside down (confidence low), try rotating 180
       if (confidence < 60) {
         const rotated = rotateCanvas(processed, 180);
         const res2 = await ocrWorkerRef.current.recognize(rotated);
@@ -350,7 +361,20 @@ export default function StaffPage() {
     if (!video) { alert('Camera on hmasa rawh'); return; }
     const canvas = canvasRef.current!;
     canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-    canvas.getContext('2d')!.drawImage(video, 0, 0);
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(video, 0, 0);
+    
+    // NEW: Try to decode QR from the captured frame first
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const qrCode = jsQR(imageData.data, imageData.width, imageData.height);
+    
+    if (qrCode && qrCode.data) {
+      // QR awm ta - a data hmang lawk rawh, OCR skip
+      handleQr(qrCode.data);
+      return;
+    }
+
+    // QR awm loh chuan normal OCR a kal zel ang
     await runOcrOnImage(canvas);
   };
 
@@ -423,7 +447,6 @@ export default function StaffPage() {
         await sup.from('inventory').insert([{ name: pName, part_no: scannedNo, category: cat, stock: Number(pQty || 1), price: Number(pPrice || 0) }]);
       }
     } catch {
-      // If part_no column missing, fallback to name+code
       await sup.from('inventory').insert([{ name: `${scannedNo} - ${pName}`, category: cat, stock: Number(pQty || 1), price: Number(pPrice || 0) }]);
     }
     setShowPartConfirm(false); setPendingPart(null); setPName(''); setPPrice('150'); setPQty('1'); await load(); setTab('parts'); isProcessingRef.current = false;
