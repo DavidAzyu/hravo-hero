@@ -18,12 +18,16 @@ const getSupabase = () => supabase;
 // remove NEXT_PUBLIC_ADMIN_PASSWORD from env vars once the SQL is live.
 const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || '';
 
-const verifyAdminPassword = async (pw: string): Promise<boolean> => {
+const verifyAdminPassword = async (pw: string): Promise<'ok' | 'bad' | 'unconfigured'> => {
   try {
     const { data, error } = await supabase.rpc('verify_admin_password', { p_password: pw });
-    if (!error) return data === true;
+    if (!error) return data === true ? 'ok' : 'bad';
   } catch {}
-  return ADMIN_PASSWORD !== '' && pw === ADMIN_PASSWORD;
+  if (ADMIN_PASSWORD !== '') {
+    return pw === ADMIN_PASSWORD ? 'ok' : 'bad';
+  }
+  // Neither the RPC (SQL not run) nor the env var is configured on this deploy.
+  return 'unconfigured';
 };
 
 const readLocalList = (key: string, fallback: any[] = []) => {
@@ -308,10 +312,13 @@ export default function AdminPage() {
   }, []);
 
   const handleLogin = async () => {
-    if (await verifyAdminPassword(passwordInput)) {
+    const res = await verifyAdminPassword(passwordInput);
+    if (res === 'ok') {
       setIsAuthenticated(true);
       localStorage.setItem('honda_admin_auth', 'true');
       setPasswordInput('');
+    } else if (res === 'unconfigured') {
+      alert('Admin auth hi he deploy ah setup loh a ni. Vercel env ah NEXT_PUBLIC_ADMIN_PASSWORD dah rawh (+ Redeploy) emaw Supabase ah supabase/security-hardening.sql run rawh.');
     } else alert('Password dik lo!');
   };
   const handleLogout = () => {
@@ -606,7 +613,7 @@ export default function AdminPage() {
 
     const financeDeleteKeys = ['finance_journal', 'capital', 'loan', 'loan_payment', 'vendor_payable', 'expense', 'asset'];
     const isFinanceDelete = financeDeleteKeys.includes(showDeleteConfirm.tb);
-    if (!isFinanceDelete && !(await verifyAdminPassword(deletePassword))) {
+    if (!isFinanceDelete && (await verifyAdminPassword(deletePassword)) !== 'ok') {
       alert('Password dik lo!');
       return;
     }
@@ -641,7 +648,7 @@ export default function AdminPage() {
   };
 
   const unlockSettings = async () => {
-    if (await verifyAdminPassword(settingsPass)) {
+    if ((await verifyAdminPassword(settingsPass)) === 'ok') {
       setSettingsUnlocked(true);
       setSettingsPass('');
     } else {

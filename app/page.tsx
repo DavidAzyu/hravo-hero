@@ -19,12 +19,16 @@ const sup = () => supabase;
 // is applied - once it is, remove NEXT_PUBLIC_ADMIN_PASSWORD from your env vars.
 const LEGACY_ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || '';
 
-const verifyAdminPassword = async (pw: string): Promise<boolean> => {
+const verifyAdminPassword = async (pw: string): Promise<'ok' | 'bad' | 'unconfigured'> => {
   try {
     const { data, error } = await sup().rpc('verify_admin_password', { p_password: pw });
-    if (!error) return data === true;
+    if (!error) return data === true ? 'ok' : 'bad';
   } catch {}
-  return LEGACY_ADMIN_PASSWORD !== '' && pw === LEGACY_ADMIN_PASSWORD;
+  if (LEGACY_ADMIN_PASSWORD !== '') {
+    return pw === LEGACY_ADMIN_PASSWORD ? 'ok' : 'bad';
+  }
+  // Neither the RPC (SQL not run) nor the env var is configured on this deploy.
+  return 'unconfigured';
 };
 
 export default function HomePage() {
@@ -38,12 +42,21 @@ export default function HomePage() {
 
   const adminLogin = async () => {
     setLoading(true);
-    const ok = await verifyAdminPassword(pass);
+    const res = await verifyAdminPassword(pass);
     setLoading(false);
-    if (ok) {
+    if (res === 'ok') {
       localStorage.setItem('honda_admin_auth', 'true');
       localStorage.setItem('hravo_staff', JSON.stringify({ staff_name: 'Admin', role: 'Admin', isAdmin: true, phone: 'admin' }));
       router.push('/admin');
+    } else if (res === 'unconfigured') {
+      alert(
+        'Admin login hi he deploy ah setup loh a ni.\n\n' +
+        'FIX DAN 1 (recommended):\n' +
+        'Supabase Dashboard > SQL Editor > New query ah "supabase/security-hardening.sql" (repo file) content paste a Run rawh.\n' +
+        'Default password: hravo123. Chumi hnuah siang nan SQL ah: SELECT public.set_admin_password(\'I-Thar-Password-Sang\');\n\n' +
+        'FIX DAN 2:\n' +
+        'Vercel > Project > Settings > Environment Variables ah NEXT_PUBLIC_ADMIN_PASSWORD = i password dah rawh, chumi hnuah Redeploy rawh.'
+      );
     } else {
       alert('Password dik lo!');
     }

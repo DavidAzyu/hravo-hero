@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Html5Qrcode } from 'html5-qrcode';
 
-// SECURITY: env-only, no hardcoded fallbacks (set in .env.local / Vercel)
+// SECURITY: env-only, no hardcoded fallbacks (set in.env.local / Vercel)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 // SINGLETON SUPABASE - avoids "GoTrueClient multiple instances" warnings
@@ -54,13 +54,19 @@ export default function StaffPage() {
   const [pendingPart, setPendingPart] = useState<any>(null);
   const [ocrText, setOcrText] = useState('');
   const [scanStatus, setScanStatus] = useState('Ready');
+  // --- OCR ADDED ONLY - ENGMAH PAIH LOH ---
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const isStartingRef = useRef(false);
 
   // Role-based feature visibility
   const isManager = staff?.role === 'Manager';
   const isAccountant = staff?.role === 'Accountant';
   const isMechanic = staff?.role === 'Mechanic';
   const isSales = staff?.role === 'Sales';
-  
+
   const canViewStock = isManager || isAccountant || isSales || isMechanic;
   const canViewParts = isManager || isAccountant || isMechanic;
   const canAddVehicle = isManager || isAccountant || isSales;
@@ -110,7 +116,7 @@ export default function StaffPage() {
     try {
       const { data, error } = await sup.rpc('verify_staff_login', { p_phone: trimmedPhone, p_password: trimmedPassword });
       if (!error) {
-        const res: any = typeof data === 'string' ? JSON.parse(data) : data;
+        const res: any = typeof data === 'string'? JSON.parse(data) : data;
         if (res?.ok && res.profile) {
           setStaff(res.profile);
           setLogged(true);
@@ -129,10 +135,10 @@ export default function StaffPage() {
     // Legacy fallback (only until supabase/security-hardening.sql is applied)
     try {
       const { data, error } = await sup
-        .from('staff_profiles')
-        .select('*')
-        .eq('phone', trimmedPhone)
-        .maybeSingle();
+       .from('staff_profiles')
+       .select('*')
+       .eq('phone', trimmedPhone)
+       .maybeSingle();
 
       if (error) {
         alert('Supabase error: ' + error.message);
@@ -145,13 +151,13 @@ export default function StaffPage() {
         return;
       }
 
-      const savedPassword = typeof data.password === 'string' ? data.password.trim() : '';
+      const savedPassword = typeof data.password === 'string'? data.password.trim() : '';
       if (savedPassword) {
         if (!trimmedPassword) {
           alert('Password dah rawh');
           return;
         }
-        if (savedPassword !== trimmedPassword) {
+        if (savedPassword!== trimmedPassword) {
           alert('Password dik lo!');
           return;
         }
@@ -186,7 +192,7 @@ export default function StaffPage() {
     const qtyMatch = val.match(/QUANTITY:\s*(\d+)/i) || val.match(/QTY\s*(\d+)/i);
     if (qtyMatch) qty = qtyMatch[1];
     const codeMatch = val.match(/(9\d{4}[A-Z0-9]+)/);
-    return { name: name || (codeMatch ? codeMatch[1] : val.slice(0, 20)), price: price || '150', qty, code: codeMatch?.[1] || val.slice(0, 14) };
+    return { name: name || (codeMatch? codeMatch[1] : val.slice(0, 20)), price: price || '150', qty, code: codeMatch?.[1] || val.slice(0, 14) };
   };
 
   const applyParsedPart = (raw: string) => {
@@ -209,7 +215,7 @@ export default function StaffPage() {
     setQr(code);
     const sup = getSupabase();
     if (mode === 'service') {
-      if (!canCompleteService && !canViewService) {
+      if (!canCompleteService &&!canViewService) {
         alert('Service hmu thei lo - role check');
         return;
       }
@@ -220,7 +226,7 @@ export default function StaffPage() {
           return;
         }
         setCompletingService(s);
-        setCompletePrice(String(s.amount && s.amount > 0 ? s.amount : 500));
+        setCompletePrice(String(s.amount && s.amount > 0? s.amount : 500));
         setScanStatus(`Service matched: ${s.customer_name}`);
         stopCam();
         return;
@@ -229,7 +235,7 @@ export default function StaffPage() {
       const { data } = await sup.from('service_bookings').select('*').eq('qr_code', code).maybeSingle();
       if (data) {
         setCompletingService(data);
-        setCompletePrice(String(data.amount && data.amount > 0 ? data.amount : 500));
+        setCompletePrice(String(data.amount && data.amount > 0? data.amount : 500));
         setScanStatus(`Service matched: ${data.customer_name}`);
         stopCam();
         return;
@@ -251,14 +257,63 @@ export default function StaffPage() {
     }
   };
 
+  // --- OCR REAL FUNCTION ADDED ---
+  const runOcrOnImage = async (imageSource: any) => {
+    setOcrLoading(true);
+    setOcrProgress(0);
+    setScanStatus('OCR reading...');
+    try {
+      const { createWorker } = await import('tesseract.js');
+      const worker: any = await createWorker('eng', 1, {
+        logger: (m: any) => {
+          if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100));
+        }
+      });
+      const { data: { text } } = await worker.recognize(imageSource);
+      await worker.terminate();
+      setOcrText(text);
+      setScanStatus(`OCR Done: ${text.slice(0, 30)}`);
+      if (text.trim().length > 3) applyParsedPart(text);
+      else alert('Text a chhiar thei lo - a fiah lo deuh a ni');
+    } catch (e: any) {
+      alert('OCR Error: ' + e.message);
+      setScanStatus('OCR failed');
+    } finally {
+      setOcrLoading(false);
+    }
+  };
+
+  const captureFrameAndOcr = async () => {
+    const video = document.querySelector(`#${qrRegionId} video`) as HTMLVideoElement;
+    if (!video) {
+      alert('Camera on hmasa rawh - START CAMERA hmet rawh');
+      return;
+    }
+    const canvas = canvasRef.current!;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(video, 0, 0);
+    await runOcrOnImage(canvas);
+  };
+
+  const handleFileOcr = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await runOcrOnImage(file);
+  };
+
   const performManualOcr = () => {
     const clean = ocrText.trim();
     if (!clean) return;
     applyParsedPart(clean);
-    setOcrText('');
+    // i duh chuan hetah clear suh - i duh chuan a awm reng ang
+    // setOcrText('');
   };
 
   const startCam = async (m: string) => {
+    if (isStartingRef.current) return;
+    isStartingRef.current = true;
     setMode(m);
     setScanning(true);
     setScanStatus('Camera opening...');
@@ -284,6 +339,7 @@ export default function StaffPage() {
         setScanStatus('Camera unavailable');
         alert('Camera phal lo - HTTPS ah lut rawh');
       }
+      isStartingRef.current = false;
     }, 250);
   };
 
@@ -327,12 +383,12 @@ export default function StaffPage() {
       alert('Dawn add thei lo - Manager or Accountant or Sales chauh');
       return;
     }
-    if (!dAmt || !dReason) {
+    if (!dAmt ||!dReason) {
       alert('Amount leh Reason hi fill rawh');
       return;
     }
     const sup = getSupabase();
-    await sup.from('transactions').insert([{ type: 'lut', amount: Number(dAmt), reason: (dCust ? dCust + ' - ' : '') + dReason + ' - ' + dMode + ' - BY ' + staff.staff_name }]);
+    await sup.from('transactions').insert([{ type: 'lut', amount: Number(dAmt), reason: (dCust? dCust + ' - ' : '') + dReason + ' - ' + dMode + ' - BY ' + staff.staff_name }]);
     load();
     setDAmt('');
     setDReason('');
@@ -346,7 +402,7 @@ export default function StaffPage() {
       alert('Vehicle add thei lo - Manager or Accountant or Sales chauh');
       return;
     }
-    if (!vModel || !vChassis) {
+    if (!vModel ||!vChassis) {
       alert('Model leh Chassis hi fill rawh');
       return;
     }
@@ -371,7 +427,7 @@ export default function StaffPage() {
     }
     if (!pName) return;
     const sup = getSupabase();
-    const fullName = pendingPart?.code ? `${pendingPart.code} - ${pName}` : pName;
+    const fullName = pendingPart?.code? `${pendingPart.code} - ${pName}` : pName;
     const existing = inv.find((x: any) => x.category === cat && x.name.toLowerCase() === fullName.toLowerCase());
     if (existing) {
       await sup.from('inventory').update({ stock: existing.stock + Number(pQty || 1), price: Number(pPrice || existing.price), name: fullName }).eq('id', existing.id);
@@ -437,7 +493,7 @@ export default function StaffPage() {
   ].filter(item => item.visible);
 
   const myTrans = trans.filter((t: any) => t.reason?.includes(staff.staff_name));
-  const allTrans = canViewAllTransactions ? trans : myTrans;
+  const allTrans = canViewAllTransactions? trans : myTrans;
   const myTotal = myTrans.reduce((a: any, b: any) => a + Number(b.amount || 0), 0);
 
   return (
@@ -515,7 +571,7 @@ export default function StaffPage() {
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-red-600 text-lg font-black">H</div>
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.38em] text-red-400">HRAVO</p>
+              <p className="text- font-bold uppercase tracking-[0.38em] text-red-400">HRAVO</p>
               <h1 className="mt-1 text-lg font-black tracking-[0.2em]">STAFF</h1>
             </div>
           </div>
@@ -526,7 +582,7 @@ export default function StaffPage() {
                 key={item.id}
                 onClick={() => setTab(item.id)}
                 className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left text-sm font-semibold transition ${
-                  tab === item.id ? 'bg-white text-black shadow-lg shadow-white/10' : 'bg-white/5 text-slate-300 hover:bg-white/10'
+                  tab === item.id? 'bg-white text-black shadow-lg shadow-white/10' : 'bg-white/5 text-slate-300 hover:bg-white/10'
                 }`}
               >
                 <span className="text-base">{item.icon}</span>
@@ -537,13 +593,13 @@ export default function StaffPage() {
 
           <div className="mt-auto space-y-3">
             <div className="rounded-[1.5rem] border border-emerald-500/20 bg-emerald-500/10 p-4">
-              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-emerald-300">Staff</p>
+              <p className="text- font-bold uppercase tracking-[0.3em] text-emerald-300">Staff</p>
               <p className="mt-3 text-lg font-black">{staff?.staff_name}</p>
               <p className="mt-1 text-xs text-slate-300">{staff?.role}</p>
             </div>
             {canViewMyTransactions && (
               <div className="rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-slate-300">My Total</p>
+                <p className="text- font-bold uppercase tracking-[0.3em] text-slate-300">My Total</p>
                 <p className="mt-3 text-2xl font-black text-emerald-300">₹{myTotal.toLocaleString()}</p>
               </div>
             )}
@@ -556,7 +612,7 @@ export default function StaffPage() {
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-600 text-sm font-black lg:hidden">H</div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-[0.34em] text-red-400">Workspace</p>
+                  <p className="text- uppercase tracking-[0.34em] text-red-400">Workspace</p>
                   <h2 className="mt-1 text-xl font-black tracking-[0.12em]">STAFF</h2>
                 </div>
               </div>
@@ -574,7 +630,7 @@ export default function StaffPage() {
                 <button
                   key={item.id}
                   onClick={() => setTab(item.id)}
-                  className={`rounded-full px-3 py-2 text-[10px] font-black uppercase tracking-[0.2em] ${tab === item.id ? 'bg-red-600 text-white' : 'bg-white/5 text-slate-300'}`}
+                  className={`rounded-full px-3 py-2 text- font-black uppercase tracking-[0.2em] ${tab === item.id? 'bg-red-600 text-white' : 'bg-white/5 text-slate-300'}`}
                 >
                   {item.label}
                 </button>
@@ -584,7 +640,7 @@ export default function StaffPage() {
             <div className="space-y-5 pb-10">
               {tab === 'scan' && (
                 <div className="rounded-[1.75rem] border border-cyan-500/20 bg-slate-950/80 overflow-hidden shadow-[0_0_30px_rgba(34,211,238,0.08)]">
-                  <div className="relative h-[300px] sm:h-[340px] bg-black">
+                  <div className="relative h- sm:h- bg-black">
                     <div id={qrRegionId} className="w-full h-full"></div>
                     {!scanning && (
                       <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70">
@@ -592,27 +648,39 @@ export default function StaffPage() {
                         <p className="text-xs uppercase tracking-[0.3em] text-slate-400">QR scanner ready</p>
                       </div>
                     )}
+                    <canvas ref={canvasRef} className="hidden"></canvas>
                   </div>
                   <div className="grid grid-cols-3 gap-2 p-3 bg-zinc-900/80">
-                    <button onClick={() => startCam('service')} className={`py-3 rounded-xl font-black text-xs ${mode === 'service' && scanning ? 'bg-yellow-400 text-black' : 'bg-white/10'}`}>SERVICE</button>
-                    <button onClick={() => startCam('vehicle')} className={`py-3 rounded-xl font-black text-xs ${mode === 'vehicle' && scanning ? 'bg-red-600 text-white' : 'bg-white/10'}`}>VEHICLE</button>
-                    <button onClick={() => startCam('in')} className={`py-3 rounded-xl font-black text-xs ${mode === 'in' && scanning ? 'bg-green-500 text-black' : 'bg-white/10'}`}>PARTS</button>
+                    <button onClick={() => startCam('service')} className={`py-3 rounded-xl font-black text-xs ${mode === 'service' && scanning? 'bg-yellow-400 text-black' : 'bg-white/10'}`}>SERVICE</button>
+                    <button onClick={() => startCam('vehicle')} className={`py-3 rounded-xl font-black text-xs ${mode === 'vehicle' && scanning? 'bg-red-600 text-white' : 'bg-white/10'}`}>VEHICLE</button>
+                    <button onClick={() => startCam('in')} className={`py-3 rounded-xl font-black text-xs ${mode === 'in' && scanning? 'bg-green-500 text-black' : 'bg-white/10'}`}>PARTS</button>
                   </div>
-                  {scanning ? (
-                    <button onClick={stopCam} className="w-full bg-white text-black py-3 font-black text-xs">STOP CAMERA</button>
-                  ) : (
-                    <button onClick={() => startCam(mode)} className="w-full bg-cyan-500 text-black py-3 font-black text-xs">START CAMERA - {mode.toUpperCase()}</button>
-                  )}
+                  <div className="grid grid-cols-2 gap-2 p-2 bg-black/20">
+                    {scanning? (
+                      <button onClick={stopCam} className="w-full bg-white text-black py-3 font-black text-xs rounded-xl">STOP CAMERA</button>
+                    ) : (
+                      <button onClick={() => startCam(mode)} className="w-full bg-cyan-500 text-black py-3 font-black text-xs rounded-xl">START CAMERA - {mode.toUpperCase()}</button>
+                    )}
+                    <button onClick={captureFrameAndOcr} disabled={!scanning || ocrLoading} className="w-full bg-yellow-500 disabled:opacity-30 text-black py-3 font-black text-xs rounded-xl">
+                      {ocrLoading? `${ocrProgress}% OCR...` : '📸 CAPTURE + OCR'}
+                    </button>
+                  </div>
                   <div className="p-3 space-y-2 border-t border-white/5 bg-black/20">
                     <div className="flex gap-2">
                       <input value={qr} onChange={(e) => setQr(e.target.value)} placeholder="QR Manual" className="flex-1 bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs font-mono" />
                       <button onClick={() => handleQr(qr)} className="bg-white text-black px-5 rounded-xl font-black text-xs">USE</button>
                     </div>
-                    <div className="flex gap-2">
-                      <input value={ocrText} onChange={(e) => setOcrText(e.target.value)} placeholder="OCR / part text" className="flex-1 bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs font-mono" />
-                      <button onClick={performManualOcr} className="bg-emerald-500 text-black px-5 rounded-xl font-black text-xs">OCR</button>
+                    <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 space-y-2">
+                      <div className="flex justify-between"><p className="text- font-black uppercase tracking-[0.2em] text-yellow-400">OCR - Honda Label</p><p className="text- text-white/40">{ocrLoading? `Reading ${ocrProgress}%` : scanStatus}</p></div>
+                      <div className="flex gap-2">
+                        <button onClick={() => fileInputRef.current?.click()} className="flex-1 bg-white/10 py-3 rounded-xl font-black text-xs">📁 UPLOAD PHOTO</button>
+                        <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileOcr} className="hidden" />
+                        <button onClick={performManualOcr} className="bg-emerald-500 text-black px-5 rounded-xl font-black text-xs">PARSE</button>
+                      </div>
+                      <textarea value={ocrText} onChange={(e) => setOcrText(e.target.value)} placeholder="OCR text hetah a lo lang ang... MRP, Part No" className="w-full h-24 bg-black border border-white/10 p-3 rounded-xl text-xs font-mono" />
+                      {ocrLoading && <div className="h-1 bg-white/10 rounded-full overflow-hidden"><div className="h-full bg-yellow-500 transition-all" style={{width: `${ocrProgress}%`}}></div></div>}
                     </div>
-                    <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-[10px] uppercase tracking-[0.2em] text-cyan-300">Status: {scanStatus}</div>
+                    <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text- uppercase tracking-[0.2em] text-cyan-300">Status: {scanStatus}</div>
                   </div>
                 </div>
               )}
@@ -622,8 +690,8 @@ export default function StaffPage() {
                   {canAddVehicle && (
                     <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4">
                       <div className="flex gap-2 mb-3">
-                        <button onClick={() => setVCat('bike')} className={`flex-1 py-2 rounded-full text-xs font-black ${vCat === 'bike' ? 'bg-white text-black' : 'bg-white/5'}`}>BIKE</button>
-                        <button onClick={() => setVCat('scooty')} className={`flex-1 py-2 rounded-full text-xs font-black ${vCat === 'scooty' ? 'bg-white text-black' : 'bg-white/5'}`}>SCOOTY</button>
+                        <button onClick={() => setVCat('bike')} className={`flex-1 py-2 rounded-full text-xs font-black ${vCat === 'bike'? 'bg-white text-black' : 'bg-white/5'}`}>BIKE</button>
+                        <button onClick={() => setVCat('scooty')} className={`flex-1 py-2 rounded-full text-xs font-black ${vCat === 'scooty'? 'bg-white text-black' : 'bg-white/5'}`}>SCOOTY</button>
                       </div>
                       <div className="space-y-2">
                         <input value={vModel} onChange={(e) => setVModel(e.target.value)} placeholder="Model *" className="w-full bg-black/50 border border-white/10 p-3 rounded-xl text-xs" />
@@ -641,10 +709,10 @@ export default function StaffPage() {
                     </div>
                   )}
 
-                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h-[420px] overflow-auto">
+                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h- overflow-auto">
                     <div className="p-3 flex gap-2">
-                      <button onClick={() => setVCat('bike')} className={`flex-1 py-2 rounded-full text-xs font-black ${vCat === 'bike' ? 'bg-white text-black' : 'bg-white/5'}`}>BIKE</button>
-                      <button onClick={() => setVCat('scooty')} className={`flex-1 py-2 rounded-full text-xs font-black ${vCat === 'scooty' ? 'bg-white text-black' : 'bg-white/5'}`}>SCOOTY</button>
+                      <button onClick={() => setVCat('bike')} className={`flex-1 py-2 rounded-full text-xs font-black ${vCat === 'bike'? 'bg-white text-black' : 'bg-white/5'}`}>BIKE</button>
+                      <button onClick={() => setVCat('scooty')} className={`flex-1 py-2 rounded-full text-xs font-black ${vCat === 'scooty'? 'bg-white text-black' : 'bg-white/5'}`}>SCOOTY</button>
                     </div>
                     {veh.filter((v: any) => v.vehicle_type === vCat).map((v: any) => (
                       <div key={v.id} className="p-3 flex justify-between items-center">
@@ -662,9 +730,9 @@ export default function StaffPage() {
               {tab === 'parts' && canViewParts && (
                 <div className="space-y-3">
                   <div className="flex gap-2">
-                    <button onClick={() => setCat('bike')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'bike' ? 'bg-white text-black' : 'bg-white/5'}`}>BIKE</button>
-                    <button onClick={() => setCat('scooty')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'scooty' ? 'bg-white text-black' : 'bg-white/5'}`}>SCOOTY</button>
-                    <button onClick={() => setCat('parts')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'parts' ? 'bg-white text-black' : 'bg-white/5'}`}>PARTS</button>
+                    <button onClick={() => setCat('bike')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'bike'? 'bg-white text-black' : 'bg-white/5'}`}>BIKE</button>
+                    <button onClick={() => setCat('scooty')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'scooty'? 'bg-white text-black' : 'bg-white/5'}`}>SCOOTY</button>
+                    <button onClick={() => setCat('parts')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'parts'? 'bg-white text-black' : 'bg-white/5'}`}>PARTS</button>
                   </div>
 
                   {canAddParts && (
@@ -678,7 +746,7 @@ export default function StaffPage() {
                     </div>
                   )}
 
-                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h-[420px] overflow-auto">
+                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h- overflow-auto">
                     {inv.filter((x: any) => x.category === cat).map((v: any) => (
                       <div key={v.id} className="p-3 flex justify-between items-center">
                         <div>
@@ -708,7 +776,7 @@ export default function StaffPage() {
                     </div>
                   </div>
 
-                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h-[420px] overflow-auto">
+                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h- overflow-auto">
                     {myTrans.map((t: any) => (
                       <div key={t.id} className="p-3">
                         <p className="font-black text-xs">₹{t.amount} - {t.reason}</p>
@@ -721,13 +789,13 @@ export default function StaffPage() {
 
               {tab === 'service' && canViewService && (
                 <div className="space-y-3">
-                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h-[420px] overflow-auto">
+                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h- overflow-auto">
                     {service.map((item: any) => (
                       <div key={item.id} className="p-3">
                         <p className="font-black text-xs">{item.customer_name} | {item.model_name}</p>
                         <p className="text-xs opacity-40">{item.service_type} | {item.status} | ₹{item.amount || 'Pending'}</p>
-                        {item.status !== 'completed' && canCompleteService && (
-                          <button onClick={() => setCompletingService(item)} className="mt-2 bg-green-500 text-black px-3 py-1 rounded-full text-[10px] font-black">COMPLETE</button>
+                        {item.status!== 'completed' && canCompleteService && (
+                          <button onClick={() => setCompletingService(item)} className="mt-2 bg-green-500 text-black px-3 py-1 rounded-full text- font-black">COMPLETE</button>
                         )}
                       </div>
                     ))}
@@ -739,8 +807,8 @@ export default function StaffPage() {
                 <div className="space-y-3">
                   <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4">
                     <p className="font-black text-xs mb-3">MY WORK - ₹{myTotal.toLocaleString()}</p>
-                    <p className="text-[10px] opacity-40 mb-3">Transactions with your name</p>
-                    <div className="divide-y divide-white/5 max-h-[420px] overflow-auto">
+                    <p className="text- opacity-40 mb-3">Transactions with your name</p>
+                    <div className="divide-y divide-white/5 max-h- overflow-auto">
                       {myTrans.map((t: any) => (
                         <div key={t.id} className="p-3">
                           <p className="font-black text-xs">₹{Number(t.amount || 0).toLocaleString()} - {t.reason}</p>
