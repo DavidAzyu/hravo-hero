@@ -99,9 +99,9 @@ export default function StaffPage() {
         const worker = await createWorker('eng', 1, {
           logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); }
         });
+        // Fixed: Sparse text mode (11) and removed whitelist to prevent cutting numbers
         await worker.setParameters({
-          tessedit_pageseg_mode: 6 as any,
-          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-₹. '
+          tessedit_pageseg_mode: '11' as any
         });
         ocrWorkerRef.current = worker;
         setOcrReady(true);
@@ -247,11 +247,11 @@ export default function StaffPage() {
     }
   };
 
-  // Modified preprocessing: full image, no crop, improved threshold
+  // Fixed: Grayscale threshold for Hero labels (white background, black/red text)
   const preprocessCanvas = (sourceCanvas: HTMLCanvasElement) => {
     const out = document.createElement('canvas');
-    // Scale down if too large to improve OCR speed
-    const maxDimension = 1200;
+    // Fixed: Increased resolution from 1200 to 2400 to improve small text
+    const maxDimension = 2400;
     let scale = 1;
     if (sourceCanvas.width > maxDimension || sourceCanvas.height > maxDimension) {
       scale = maxDimension / Math.max(sourceCanvas.width, sourceCanvas.height);
@@ -263,16 +263,29 @@ export default function StaffPage() {
     ctx.drawImage(sourceCanvas, 0, 0, out.width, out.height);
     const imageData = ctx.getImageData(0, 0, out.width, out.height);
     const data = imageData.data;
-    // Blue channel threshold for Honda labels (blue background, white text)
+    // Fixed: Convert to grayscale for high contrast (Hero has white/red background, black text)
     for (let i = 0; i < data.length; i += 4) {
-      const blue = data[i+2];
-      const avg = (data[i] + data[i+1] + data[i+2]) / 3;
-      // Adjust threshold: keep if blue is dominant and brightness moderate
-      const v = (blue > 100 && avg > 70)? 255 : 0;
+      const r = data[i];
+      const g = data[i+1];
+      const b = data[i+2];
+      const gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const v = gray > 128 ? 255 : 0;
       data[i] = data[i+1] = data[i+2] = v;
     }
     ctx.putImageData(imageData, 0, 0);
     return out;
+  };
+
+  // New: Helper to rotate canvas by 180 degrees (fixes upside down images)
+  const rotateCanvas = (canvas: HTMLCanvasElement, angle: number) => {
+    const newCanvas = document.createElement('canvas');
+    newCanvas.width = canvas.width;
+    newCanvas.height = canvas.height;
+    const ctx = newCanvas.getContext('2d')!;
+    ctx.translate(newCanvas.width / 2, newCanvas.height / 2);
+    ctx.rotate(angle * Math.PI / 180);
+    ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+    return newCanvas;
   };
 
   const runOcrOnImage = async (imageSource: any) => {
@@ -289,14 +302,26 @@ export default function StaffPage() {
         const url = URL.createObjectURL(imageSource);
         await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
         baseCanvas = document.createElement('canvas');
-        const maxW = 900;
+        const maxW = 1400; // Increased slightly for better file OCR
         const sc = Math.min(1, maxW / img.width);
         baseCanvas.width = img.width * sc; baseCanvas.height = img.height * sc;
         baseCanvas.getContext('2d')!.drawImage(img, 0, 0, baseCanvas.width, baseCanvas.height);
         URL.revokeObjectURL(url);
       } else { baseCanvas = imageSource; }
+      
       const processed = preprocessCanvas(baseCanvas);
-      const { data: { text } } = await ocrWorkerRef.current.recognize(processed);
+      let { data: { text, confidence } } = await ocrWorkerRef.current.recognize(processed);
+
+      // Fixed: Check if image is upside down (confidence low), try rotating 180
+      if (confidence < 60) {
+        const rotated = rotateCanvas(processed, 180);
+        const res2 = await ocrWorkerRef.current.recognize(rotated);
+        if (res2.data.confidence > confidence) {
+          text = res2.data.text;
+          confidence = res2.data.confidence;
+        }
+      }
+
       const cleaned = text.toUpperCase();
       setOcrText(cleaned);
       if (cleaned.trim().length > 5) applyParsedPart(cleaned);
