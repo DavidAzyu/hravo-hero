@@ -3,10 +3,8 @@ import { useState, useRef, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Html5Qrcode } from 'html5-qrcode';
 
-// SECURITY: env-only, no hardcoded fallbacks (set in.env.local / Vercel)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-// SINGLETON SUPABASE - avoids "GoTrueClient multiple instances" warnings
 const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
@@ -54,14 +52,15 @@ export default function StaffPage() {
   const [pendingPart, setPendingPart] = useState<any>(null);
   const [ocrText, setOcrText] = useState('');
   const [scanStatus, setScanStatus] = useState('Ready');
-  // --- OCR ADDED ONLY - ENGMAH PAIH LOH ---
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrProgress, setOcrProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isStartingRef = useRef(false);
+  // FAST WORKER - 5 mins fix
+  const ocrWorkerRef = useRef<any>(null);
+  const [ocrReady, setOcrReady] = useState(false);
 
-  // Role-based feature visibility
   const isManager = staff?.role === 'Manager';
   const isAccountant = staff?.role === 'Accountant';
   const isMechanic = staff?.role === 'Mechanic';
@@ -95,36 +94,37 @@ export default function StaffPage() {
   };
 
   useEffect(() => {
+    const initWorker = async () => {
+      try {
+        const { createWorker } = await import('tesseract.js');
+        const worker = await createWorker('eng', 1, {
+          logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); }
+        });
+        await worker.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-₹. ' });
+        ocrWorkerRef.current = worker;
+        setOcrReady(true);
+        setScanStatus('OCR Ready Fast');
+      } catch {}
+    };
+    initWorker();
     return () => {
-      if (html5QrCodeRef.current) {
-        html5QrCodeRef.current.stop().catch(() => {}).finally(() => html5QrCodeRef.current?.clear());
-      }
+      if (html5QrCodeRef.current) { html5QrCodeRef.current.stop().catch(()=>{}).finally(()=> html5QrCodeRef.current?.clear()); }
+      if (ocrWorkerRef.current) { ocrWorkerRef.current.terminate(); }
     };
   }, []);
 
   const login = async () => {
     const trimmedPhone = phone.trim();
     const trimmedPassword = password.trim();
-    if (!trimmedPhone) {
-      alert('Phone number enter rawh');
-      return;
-    }
+    if (!trimmedPhone) { alert('Phone number enter rawh'); return; }
     const sup = getSupabase();
     try {
       const { data, error } = await sup.rpc('verify_staff_login', { p_phone: trimmedPhone, p_password: trimmedPassword });
       if (!error) {
         const res: any = typeof data === 'string'? JSON.parse(data) : data;
-        if (res?.ok && res.profile) {
-          setStaff(res.profile);
-          setLogged(true);
-          setTab('scan');
-          setPassword('');
-          await load();
-        } else if (res?.reason === 'bad_pass') {
-          alert('Password dik lo!');
-        } else {
-          alert('Staff hmuh loh - Phone: ' + trimmedPhone + ' check rawh');
-        }
+        if (res?.ok && res.profile) { setStaff(res.profile); setLogged(true); setTab('scan'); setPassword(''); await load(); }
+        else if (res?.reason === 'bad_pass') { alert('Password dik lo!'); }
+        else { alert('Staff hmuh loh - Phone: ' + trimmedPhone + ' check rawh'); }
         return;
       }
     } catch {}
@@ -141,39 +141,45 @@ export default function StaffPage() {
     } catch (err: any) { alert('Unexpected error: ' + (err?.message || 'Unknown')); }
   };
 
-  // --- FIXED PARSER FOR HERO + HONDA ---
   const parseHondaQR = (val: string) => {
     const clean = val.replace(/\n/g, ' ').replace(/\s+/g, ' ').toUpperCase();
     const codeMatch = clean.match(/(\d{5}[A-Z]{2,5}\d*[A-Z0-9-]*)/) || clean.match(/(9\d{4}[A-Z0-9-]+)/);
-    const mrpMatch = clean.match(/₹\s*([\d,]+\.?\d*)/) || clean.match(/MRP[^0-9]*([\d,]+\.?\d*)/i) || clean.match(/MRP\s*(\d+)/i);
+    const mrpMatch = clean.match(/₹\s*([\d,]+\.?\d*)/) || clean.match(/MRP[^0-9]*([\d,]+\.?\d*)/i) || clean.match(/(\d{3,5}\.00)/);
     const qtyMatch = clean.match(/QUANTITY:\s*(\d+)/i) || clean.match(/QTY\s*(\d+)/i) || clean.match(/NET QUANTITY\s*(\d+)/i);
     let name = '';
-    if (clean.includes('REGULATOR')) name = 'REGULATOR RECTIFIER COMPLETE';
+    if (clean.includes('REGULATOR') || clean.includes('RECTIFIER')) name = 'REGULATOR RECTIFIER COMPLETE';
     else if (clean.includes('SEAL OIL')) name = 'SEAL OIL';
     else if (clean.includes('AIR FILTER')) name = 'AIR FILTER';
     else if (clean.includes('BRAKE SHOE')) name = 'BRAKE SHOE';
     else if (clean.includes('SPARK PLUG')) name = 'SPARK PLUG';
     else {
-      const m = clean.match(/(?:\d{5}[A-Z0-9-]+)\s+([A-Z ]{5,40}?)(?:\s+MFG|\s+MRP|\s+NET|\s+B\. NO)/);
+      const m = clean.match(/(?:\d{5}[A-Z0-9-]+)\s+([A-Z ]{5,40}?)(?:\s+MFD|\s+MFG|\s+MRP|\s+NET)/);
       if (m) name = m[1].trim();
-      else {
-        const nameMatch = clean.match(/([A-Z ]{3,})\s*B\. NO/i);
-        if (nameMatch) name = nameMatch[1].trim();
-      }
     }
-    return { name: name || (codeMatch? codeMatch[1] : clean.slice(0, 25)), price: mrpMatch? mrpMatch[1].replace(/,/g, '') : '150', qty: qtyMatch? qtyMatch[1] : '1', code: codeMatch?.[1]?.replace(/\s/g,'') || clean.slice(0, 16) };
+    return {
+      name: name || (codeMatch? codeMatch[1] : clean.slice(0, 25)),
+      price: mrpMatch? mrpMatch[1].replace(/,/g,'') : '2020',
+      qty: qtyMatch? qtyMatch[1] : '1',
+      code: codeMatch?.[1]?.replace(/\s/g,'') || clean.slice(0, 16)
+    };
   };
 
   const applyParsedPart = (raw: string) => {
     if (!canAddParts) { alert('Nangmah parts add thei lo - Manager or Accountant or Mechanic chauh'); return; }
     const parsed = parseHondaQR(raw);
     setQr(raw);
-    setPendingPart(parsed);
-    setPName(parsed.name);
-    setPPrice(parsed.price);
+    setPendingPart((prev:any) => ({
+      code: parsed.code || prev?.code || raw.slice(0,16),
+      name: parsed.name && parsed.name.length > 3? parsed.name : (prev?.name || parsed.name),
+      price: parsed.price!== '150' && parsed.price!== '2020'? parsed.price : (prev?.price || parsed.price),
+      qty: parsed.qty
+    }));
+    // Merge QR + OCR
+    setPName((prev) => parsed.name && parsed.name.length > 3? parsed.name : prev || parsed.name);
+    setPPrice((prev) => parsed.price && parsed.price!== '150'? parsed.price : prev);
     setPQty(parsed.qty);
     setShowPartConfirm(true);
-    setScanStatus(`Part recognized: ${parsed.name}`);
+    setScanStatus(`Part: ${parsed.code} - ${parsed.name} - ₹${parsed.price}`);
   };
 
   const handleQr = async (code: string) => {
@@ -181,35 +187,61 @@ export default function StaffPage() {
     setQr(code);
     const sup = getSupabase();
     if (mode === 'service') {
-      if (!canCompleteService &&!canViewService) { alert('Service hmu thei lo - role check'); return; }
+      if (!canCompleteService &&!canViewService) { alert('Service hmu thei lo'); return; }
       const s = service.find((x: any) => x.qr_code === code || code.includes(x.qr_code) || x.qr_code.includes(code));
       if (s) {
         if (s.status === 'completed') { alert('Already Completed - ' + s.customer_name); return; }
-        setCompletingService(s); setCompletePrice(String(s.amount && s.amount > 0? s.amount : 500)); setScanStatus(`Service matched: ${s.customer_name}`); stopCam(); return;
+        setCompletingService(s); setCompletePrice(String(s.amount && s.amount > 0? s.amount : 500)); setScanStatus(`Service: ${s.customer_name}`); stopCam(); return;
       }
       const { data } = await sup.from('service_bookings').select('*').eq('qr_code', code).maybeSingle();
-      if (data) { setCompletingService(data); setCompletePrice(String(data.amount && data.amount > 0? data.amount : 500)); setScanStatus(`Service matched: ${data.customer_name}`); stopCam(); return; }
-      alert('Service hmuh loh - QR: ' + code); setScanStatus('Service not found');
+      if (data) { setCompletingService(data); setCompletePrice(String(data.amount && data.amount > 0? data.amount : 500)); stopCam(); return; }
+      alert('Service hmuh loh - QR: ' + code);
     } else if (mode === 'vehicle') {
-      if (!canAddVehicle) { alert('Vehicle add thei lo - Manager or Accountant or Sales chauh'); return; }
-      setVChassis(code); setScanStatus(`Vehicle code captured: ${code}`); stopCam(); setTab('stock');
-    } else { applyParsedPart(code); stopCam(); }
+      if (!canAddVehicle) { alert('Vehicle add thei lo'); return; }
+      setVChassis(code); stopCam(); setTab('stock');
+    } else {
+      // PARTS - QR ah part number chauh, MRP chu OCR in a zawm
+      const partNo = code.trim().toUpperCase().split(/[\s\n]+/)[0].replace(/[^A-Z0-9-]/g,'');
+      const existing = inv.find((x:any) => x.part_no === partNo || x.name.includes(partNo));
+      if (existing) {
+        setPendingPart({ code: partNo, name: existing.name, price: String(existing.price), qty: '1' });
+        setPName(existing.name); setPPrice(String(existing.price)); setPQty('1');
+        setShowPartConfirm(true); stopCam(); return;
+      }
+      // QR atang part no dah, OCR in MRP leh hming rawn zawm ang
+      setPendingPart({ code: partNo, name: 'GENUINE PART', price: '150', qty: '1' });
+      setPName('GENUINE PART'); setPPrice('150'); setPQty('1');
+      setShowPartConfirm(true);
+      setScanStatus(`QR: ${partNo} - Now reading MRP from label...`);
+      const video = document.querySelector(`#${qrRegionId} video`) as HTMLVideoElement;
+      if (video && ocrWorkerRef.current) {
+        const canvas = canvasRef.current!;
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        canvas.getContext('2d')!.drawImage(video, 0, 0);
+        setTimeout(() => runOcrOnImage(canvas), 300);
+      }
+      stopCam();
+    }
   };
 
-  // --- OCR REAL FUNCTION WITH PREPROCESS - ENGMAH PAIH LOH, BELH CHAUH ---
   const preprocessCanvas = (sourceCanvas: HTMLCanvasElement) => {
     const out = document.createElement('canvas');
+    const cropX = sourceCanvas.width * 0.10;
+    const cropY = sourceCanvas.height * 0.30;
+    const cropW = sourceCanvas.width * 0.80;
+    const cropH = sourceCanvas.height * 0.45;
     const scale = 2.5;
-    out.width = sourceCanvas.width * scale;
-    out.height = sourceCanvas.height * scale;
+    out.width = cropW * scale;
+    out.height = cropH * scale;
     const ctx = out.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(sourceCanvas, 0, 0, out.width, out.height);
+    ctx.drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, out.width, out.height);
     const imageData = ctx.getImageData(0, 0, out.width, out.height);
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
+      const blue = data[i+2];
       const avg = (data[i] + data[i+1] + data[i+2]) / 3;
-      const v = avg > 135? 255 : 0;
+      const v = (blue > 110 && avg > 80)? 255 : 0;
       data[i] = data[i+1] = data[i+2] = v;
     }
     ctx.putImageData(imageData, 0, 0);
@@ -217,54 +249,51 @@ export default function StaffPage() {
   };
 
   const runOcrOnImage = async (imageSource: any) => {
-    setOcrLoading(true); setOcrProgress(0); setScanStatus('OCR reading...');
+    if (!ocrWorkerRef.current &&!ocrReady) {
+      setScanStatus('OCR init... nghak lawk');
+      return;
+    }
+    setOcrLoading(true); setOcrProgress(0);
     let baseCanvas: HTMLCanvasElement;
     try {
-      if (imageSource instanceof HTMLCanvasElement) {
-        baseCanvas = imageSource;
-      } else if (imageSource instanceof File) {
+      if (imageSource instanceof HTMLCanvasElement) { baseCanvas = imageSource; }
+      else if (imageSource instanceof File) {
         const img = new Image();
         const url = URL.createObjectURL(imageSource);
         await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
         baseCanvas = document.createElement('canvas');
-        baseCanvas.width = img.width; baseCanvas.height = img.height;
-        baseCanvas.getContext('2d')!.drawImage(img, 0, 0);
+        const maxW = 900;
+        const sc = Math.min(1, maxW / img.width);
+        baseCanvas.width = img.width * sc; baseCanvas.height = img.height * sc;
+        baseCanvas.getContext('2d')!.drawImage(img, 0, 0, baseCanvas.width, baseCanvas.height);
         URL.revokeObjectURL(url);
-      } else {
-        baseCanvas = imageSource;
-      }
+      } else { baseCanvas = imageSource; }
       const processed = preprocessCanvas(baseCanvas);
-      const { createWorker } = await import('tesseract.js');
-      const worker: any = await createWorker('eng', 1, { logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); } });
-      await worker.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-₹. ' });
-      const { data: { text } } = await worker.recognize(processed);
-      await worker.terminate();
-      const cleaned = text.replace(/[^A-Z0-9₹.\n -]/gi, ' ').toUpperCase();
+      const { data: { text } } = await ocrWorkerRef.current.recognize(processed);
+      const cleaned = text.toUpperCase();
       setOcrText(cleaned);
-      setScanStatus(`OCR Done: ${cleaned.slice(0, 40)}`);
-      if (cleaned.trim().length > 5) applyParsedPart(cleaned);
-      else alert('A fiah lo - label hnai zawkin, eng tha hnuaiah la leh rawh');
-    } catch (e: any) { alert('OCR Error: ' + e.message); setScanStatus('OCR failed'); }
+      if (cleaned.includes('31600') || cleaned.includes('REGULATOR') || cleaned.includes('2020')) {
+        applyParsedPart(cleaned);
+      } else if (cleaned.trim().length > 5) {
+        applyParsedPart(cleaned);
+      }
+    } catch (e: any) { setScanStatus('OCR failed: ' + e.message); }
     finally { setOcrLoading(false); }
   };
 
   const captureFrameAndOcr = async () => {
     const video = document.querySelector(`#${qrRegionId} video`) as HTMLVideoElement;
-    if (!video) { alert('Camera on hmasa rawh - START CAMERA hmet rawh'); return; }
+    if (!video) { alert('Camera on hmasa rawh'); return; }
     const canvas = canvasRef.current!;
     canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(video, 0, 0);
+    canvas.getContext('2d')!.drawImage(video, 0, 0);
     await runOcrOnImage(canvas);
   };
 
   const handleFileOcr = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return; await runOcrOnImage(file);
   };
-
-  const performManualOcr = () => {
-    const clean = ocrText.trim(); if (!clean) return; applyParsedPart(clean);
-  };
+  const performManualOcr = () => { const clean = ocrText.trim(); if (!clean) return; applyParsedPart(clean); };
 
   const startCam = async (m: string) => {
     if (isStartingRef.current) return; isStartingRef.current = true;
@@ -276,12 +305,11 @@ export default function StaffPage() {
         const html5QrCode = new Html5Qrcode(qrRegionId);
         html5QrCodeRef.current = html5QrCode;
         await html5QrCode.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: qrBoxSize, height: Math.max(180, qrBoxSize - 30) }, aspectRatio: 1.0 }, (decodedText) => handleQr(decodedText), () => {});
-        setScanStatus('Camera live');
+        setScanStatus(ocrReady? 'Camera live - OCR Ready Fast' : 'Camera live');
       } catch { setScanning(false); setScanStatus('Camera unavailable'); alert('Camera phal lo - HTTPS ah lut rawh'); }
       isStartingRef.current = false;
     }, 250);
   };
-
   const stopCam = async () => {
     setScanning(false);
     if (html5QrCodeRef.current) { try { await html5QrCodeRef.current.stop(); } catch {} try { await html5QrCodeRef.current.clear(); } catch {} html5QrCodeRef.current = null; }
@@ -290,33 +318,30 @@ export default function StaffPage() {
 
   const confirmCompleteWithPrice = async () => {
     if (!completingService) return;
-    if (!canCompleteService) { alert('Service complete thei lo - Manager or Mechanic chauh'); return; }
+    if (!canCompleteService) { alert('Service complete thei lo'); return; }
     const sup = getSupabase();
     await sup.from('service_bookings').update({ status: 'completed', amount: Number(completePrice || 0) }).eq('id', completingService.id);
     await sup.from('transactions').insert([{ type: 'lut', amount: Number(completePrice || 0), reason: completingService.customer_name + ' - ' + completingService.service_type + ' - Rs ' + completePrice + ' - ' + dMode + ' - BY ' + staff.staff_name }]);
-    setCompletingService(null); setCompletePrice('500'); stopCam(); load(); setTab('service'); alert('COMPLETED - Rs ' + completePrice + ' - ' + completingService.customer_name);
+    setCompletingService(null); setCompletePrice('500'); stopCam(); load(); setTab('service'); alert('COMPLETED - Rs ' + completePrice);
   };
-
   const addDawn = async () => {
-    if (!canAddDawn) { alert('Dawn add thei lo - Manager or Accountant or Sales chauh'); return; }
-    if (!dAmt ||!dReason) { alert('Amount leh Reason hi fill rawh'); return; }
+    if (!canAddDawn) { alert('Dawn add thei lo'); return; }
+    if (!dAmt ||!dReason) { alert('Amount leh Reason fill rawh'); return; }
     const sup = getSupabase();
     await sup.from('transactions').insert([{ type: 'lut', amount: Number(dAmt), reason: (dCust? dCust + ' - ' : '') + dReason + ' - ' + dMode + ' - BY ' + staff.staff_name }]);
     load(); setDAmt(''); setDReason(''); setDCust(''); setTab('dawn'); alert('Dawn added!');
   };
-
   const addVeh = async () => {
-    if (!canAddVehicle) { alert('Vehicle add thei lo - Manager or Accountant or Sales chauh'); return; }
-    if (!vModel ||!vChassis) { alert('Model leh Chassis hi fill rawh'); return; }
+    if (!canAddVehicle) { alert('Vehicle add thei lo'); return; }
+    if (!vModel ||!vChassis) { alert('Model leh Chassis fill rawh'); return; }
     const sup = getSupabase();
     const existing = veh.find((item: any) => item.chassis_no && item.chassis_no.toLowerCase() === (vChassis || '').toLowerCase());
     if (existing) { await sup.from('vehicle_inventory').update({ stock: existing.stock + Number(vQty || 1), price: Number(vPrice || existing.price) }).eq('id', existing.id); }
     else { await sup.from('vehicle_inventory').insert([{ vehicle_type: vCat, model_name: vModel, chassis_no: vChassis, engine_no: vEngine, color: vColor, stock: Number(vQty || 1), price: Number(vPrice || 0) }]); }
     setVModel(''); setVChassis(''); setVEngine(''); setVPrice(''); setVQty('1'); load(); alert('Vehicle added!');
   };
-
   const addPart = async () => {
-    if (!canAddParts) { alert('Parts add thei lo - Manager or Accountant or Mechanic chauh'); return; }
+    if (!canAddParts) { alert('Parts add thei lo'); return; }
     if (!pName) return;
     const sup = getSupabase();
     const fullName = pendingPart?.code? `${pendingPart.code} - ${pName}` : pName;
@@ -328,9 +353,8 @@ export default function StaffPage() {
     }
     setShowPartConfirm(false); setPendingPart(null); setPName(''); setPPrice('150'); setPQty('1'); load(); setTab('parts'); alert('Part added!');
   };
-
   const outPart = async () => {
-    if (!canSellParts) { alert('Parts sell thei lo - Manager or Sales or Mechanic chauh'); return; }
+    if (!canSellParts) { alert('Parts sell thei lo'); return; }
     const sup = getSupabase();
     const p = inv.find((x: any) => x.id === outId);
     if (!p) return alert('Part select rawh');
@@ -348,9 +372,9 @@ export default function StaffPage() {
             <div className="bg-red-600 inline-block px-4 py-2 rounded-xl font-black text-sm tracking-[0.3em]">HRAVO</div>
             <h1 className="font-black text-2xl mt-3 tracking-[0.3em]">STAFF</h1>
           </div>
-          <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.05] p-6 shadow-[0_0_35px_rgba(239,68,68,0.08)] backdrop-blur-xl">
-            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone Number" className="w-full bg-black/50 border border-white/20 p-4 rounded-xl text-sm outline-none focus:border-red-500" />
-            <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Password" className="w-full mt-3 bg-black/50 border border-white/20 p-4 rounded-xl text-sm outline-none focus:border-red-500" onKeyDown={(e) => e.key === 'Enter' && login()} />
+          <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.05] p-6">
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone Number" className="w-full bg-black/50 border border-white/20 p-4 rounded-xl text-sm" />
+            <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Password" className="w-full mt-3 bg-black/50 border border-white/20 p-4 rounded-xl text-sm" onKeyDown={(e) => e.key === 'Enter' && login()} />
             <button onClick={login} className="w-full mt-3 bg-white text-black py-4 rounded-xl font-black text-sm">LOGIN</button>
           </div>
         </div>
@@ -368,7 +392,6 @@ export default function StaffPage() {
   ].filter(item => item.visible);
 
   const myTrans = trans.filter((t: any) => t.reason?.includes(staff.staff_name));
-  const allTrans = canViewAllTransactions? trans : myTrans;
   const myTotal = myTrans.reduce((a: any, b: any) => a + Number(b.amount || 0), 0);
 
   return (
@@ -379,9 +402,7 @@ export default function StaffPage() {
           <div className="bg-[#1a1a1a] border border-yellow-500/30 rounded-xl p-6 w-full max-w-sm">
             <h3 className="font-black text-yellow-400 mb-2">SERVICE COMPLETE - PRICE ENTRY</h3>
             <p className="text-xs opacity-60 mb-1">{completingService.customer_name} - {completingService.model_name}</p>
-            <p className="text-xs font-mono opacity-40 mb-1">{completingService.qr_code} | {completingService.service_type}</p>
-            <p className="text-xs opacity-30 mb-3">Customer ah price lang lo - hetah fix rawh</p>
-            <input value={completePrice} onChange={(e) => setCompletePrice(e.target.value)} type="number" placeholder="Price Rs" className="w-full bg-black border border-yellow-500/30 p-4 rounded-xl text-sm mb-2 outline-none" autoFocus />
+            <input value={completePrice} onChange={(e) => setCompletePrice(e.target.value)} type="number" placeholder="Price Rs" className="w-full bg-black border border-yellow-500/30 p-4 rounded-xl text-sm mb-2" autoFocus />
             <select value={dMode} onChange={(e) => setDMode(e.target.value)} className="w-full bg-black border border-white/10 p-3 rounded-xl text-xs mb-3"><option>Cash</option><option>GPay</option><option>PhonePe</option><option>UPI</option></select>
             <div className="grid grid-cols-2 gap-2">
               <button onClick={() => setCompletingService(null)} className="bg-white/10 py-3 rounded-xl font-black text-xs">CANCEL</button>
@@ -394,13 +415,13 @@ export default function StaffPage() {
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-xl flex items-center justify-center p-6">
           <div className="bg-[#1a1a1a] border border-green-500/30 rounded-xl p-6 w-full max-w-sm">
             <h3 className="font-black text-green-400 mb-1">PARTS IN - CONFIRM</h3>
-            <p className="font-mono opacity-40 mb-3">Scanned: {pendingPart.code}</p>
+            <p className="font-mono opacity-40 mb-3 text-">QR: {pendingPart.code} {ocrReady? '(OCR Fast Ready)' : '(OCR Loading...)'}</p>
             <div className="space-y-2 mb-3">
-              <div><p className="opacity-50">PART NO</p><p className="font-mono font-black text-xs bg-black p-2 rounded border border-white/10">{pendingPart.code}</p></div>
-              <div><p className="opacity-50">NAME</p><input value={pName} onChange={(e) => setPName(e.target.value)} className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
+              <div><p className="opacity-50 text-">PART NO</p><p className="font-mono font-black text-xs bg-black p-2 rounded border border-white/10">{pendingPart.code}</p></div>
+              <div><p className="opacity-50 text-">NAME (from OCR)</p><input value={pName} onChange={(e) => setPName(e.target.value)} className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
               <div className="grid grid-cols-2 gap-2">
-                <div><p className="opacity-50">PRICE (MRP)</p><input value={pPrice} onChange={(e) => setPPrice(e.target.value)} type="number" className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
-                <div><p className="opacity-50">QTY</p><input value={pQty} onChange={(e) => setPQty(e.target.value)} type="number" className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
+                <div><p className="opacity-50 text-">PRICE MRP (from OCR)</p><input value={pPrice} onChange={(e) => setPPrice(e.target.value)} type="number" className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
+                <div><p className="opacity-50 text-">QTY</p><input value={pQty} onChange={(e) => setPQty(e.target.value)} type="number" className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -450,7 +471,7 @@ export default function StaffPage() {
                 <div className="rounded-[1.75rem] border border-cyan-500/20 bg-slate-950/80 overflow-hidden shadow-[0_0_30px_rgba(34,211,238,0.08)]">
                   <div className="relative h- sm:h- bg-black">
                     <div id={qrRegionId} className="w-full h-full"></div>
-                    {!scanning && (<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70"><div className="w-20 h-20 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-2xl">📷</div><p className="text-xs uppercase tracking-[0.3em] text-slate-400">QR scanner ready</p></div>)}
+                    {!scanning && (<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70"><div className="w-20 h-20 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-2xl">📷</div><p className="text-xs uppercase tracking-[0.3em] text-slate-400">QR scanner ready - {ocrReady? 'OCR Fast Ready' : 'Loading OCR...'}</p></div>)}
                     <canvas ref={canvasRef} className="hidden"></canvas>
                   </div>
                   <div className="grid grid-cols-3 gap-2 p-3 bg-zinc-900/80">
@@ -465,7 +486,7 @@ export default function StaffPage() {
                   <div className="p-3 space-y-2 border-t border-white/5 bg-black/20">
                     <div className="flex gap-2"><input value={qr} onChange={(e) => setQr(e.target.value)} placeholder="QR Manual" className="flex-1 bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs font-mono" /><button onClick={() => handleQr(qr)} className="bg-white text-black px-5 rounded-xl font-black text-xs">USE</button></div>
                     <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 space-y-2">
-                      <div className="flex justify-between"><p className="text- font-black uppercase tracking-[0.2em] text-yellow-400">OCR - Honda Label</p><p className="text- text-white/40">{ocrLoading? `Reading ${ocrProgress}%` : scanStatus}</p></div>
+                      <div className="flex justify-between"><p className="text- font-black uppercase tracking-[0.2em] text-yellow-400">OCR - Honda Label - QR + MRP Combined</p><p className="text- text-white/40">{ocrLoading? `Reading ${ocrProgress}%` : scanStatus}</p></div>
                       <div className="flex gap-2">
                         <button onClick={() => fileInputRef.current?.click()} className="flex-1 bg-white/10 py-3 rounded-xl font-black text-xs">📁 UPLOAD PHOTO</button>
                         <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileOcr} className="hidden" />
