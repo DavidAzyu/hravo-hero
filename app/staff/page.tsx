@@ -57,6 +57,7 @@ export default function StaffPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isStartingRef = useRef(false);
+  const isProcessingRef = useRef(false); // FIX LOOP
   const ocrWorkerRef = useRef<any>(null);
   const [ocrReady, setOcrReady] = useState(false);
 
@@ -74,7 +75,6 @@ export default function StaffPage() {
   const canCompleteService = isManager || isMechanic;
   const canViewService = isManager || isMechanic || isSales || isAccountant;
   const canViewMyTransactions = true;
-  const canViewAllTransactions = isManager || isAccountant;
 
   const load = async () => {
     const sup = getSupabase();
@@ -124,60 +124,59 @@ export default function StaffPage() {
       const { data, error } = await sup.rpc('verify_staff_login', { p_phone: trimmedPhone, p_password: trimmedPassword });
       if (!error) {
         const res: any = typeof data === 'string'? JSON.parse(data) : data;
-        if (res?.ok && res.profile) { setStaff(res.profile); setLogged(true); setTab('scan'); setPassword(''); await load(); }
-        else if (res?.reason === 'bad_pass') { alert('Password dik lo!'); }
-        else { alert('Staff hmuh loh - Phone: ' + trimmedPhone + ' check rawh'); }
-        return;
+        if (res?.ok && res.profile) { setStaff(res.profile); setLogged(true); setTab('scan'); setPassword(''); await load(); return; }
+        else if (res?.reason === 'bad_pass') { alert('Password dik lo!'); return; }
       }
     } catch {}
     try {
       const { data, error } = await sup.from('staff_profiles').select('*').eq('phone', trimmedPhone).maybeSingle();
       if (error) { alert('Supabase error: ' + error.message); return; }
-      if (!data) { alert('Staff hmuh loh - Phone: ' + trimmedPhone + ' check rawh'); return; }
+      if (!data) { alert('Staff hmuh loh'); return; }
       const savedPassword = typeof data.password === 'string'? data.password.trim() : '';
-      if (savedPassword) {
-        if (!trimmedPassword) { alert('Password dah rawh'); return; }
-        if (savedPassword!== trimmedPassword) { alert('Password dik lo!'); return; }
-      }
+      if (savedPassword && savedPassword!== trimmedPassword) { alert('Password dik lo!'); return; }
       setStaff(data); setLogged(true); setTab('scan'); setPassword(''); await load();
     } catch (err: any) { alert('Unexpected error: ' + (err?.message || 'Unknown')); }
   };
 
   const parseHondaQR = (val: string) => {
     const clean = val.replace(/\n/g, ' ').replace(/\s+/g, ' ').toUpperCase();
-    const codeMatch = clean.match(/(\d{5}[A-Z]{2,5}\d*[A-Z0-9-]*)/) || clean.match(/(9\d{4}[A-Z0-9-]+)/);
-    const mrpMatch = clean.match(/₹\s*([\d,]+\.?\d*)/) || clean.match(/MRP[^0-9]*([\d,]+\.?\d*)/i) || clean.match(/(\d{3,5}\.00)/);
-    const qtyMatch = clean.match(/QUANTITY:\s*(\d+)/i) || clean.match(/QTY\s*(\d+)/i) || clean.match(/NET QUANTITY\s*(\d+)/i);
+    const garbage = ['AL', 'ETC', 'LL', 'TT'];
+    let filtered = clean;
+    garbage.forEach(g => { filtered = filtered.replace(new RegExp(`\\b${g}\\b`, 'g'), '') });
+    const codeMatch = filtered.match(/(\d{5}[A-Z]{2,5}\d*[A-Z0-9-]*)/) || filtered.match(/(9\d{4}[A-Z0-9-]+)/) || filtered.match(/(\d{5,12})/);
+    const mrpMatch = filtered.match(/₹\s*([\d,]+\.?\d*)/) || filtered.match(/MRP[^0-9]*([\d,]+\.?\d*)/i) || filtered.match(/(\d{3,5}\.00)/);
+    const qtyMatch = filtered.match(/QUANTITY:\s*(\d+)/i) || filtered.match(/QTY\s*(\d+)/i);
     let name = '';
-    if (clean.includes('REGULATOR') || clean.includes('RECTIFIER')) name = 'REGULATOR RECTIFIER COMPLETE';
-    else if (clean.includes('SEAL OIL')) name = 'SEAL OIL';
-    else if (clean.includes('AIR FILTER')) name = 'AIR FILTER';
-    else if (clean.includes('BRAKE SHOE')) name = 'BRAKE SHOE';
-    else if (clean.includes('SPARK PLUG')) name = 'SPARK PLUG';
+    if (filtered.includes('REGULATOR')) name = 'REGULATOR RECTIFIER COMPLETE';
+    else if (filtered.includes('SEAL OIL')) name = 'SEAL OIL';
+    else if (filtered.includes('AIR FILTER')) name = 'AIR FILTER';
+    else if (filtered.includes('BRAKE SHOE')) name = 'BRAKE SHOE';
+    else if (filtered.includes('SPARK PLUG')) name = 'SPARK PLUG';
     else {
-      const m = clean.match(/(?:\d{5}[A-Z0-9-]+)\s+([A-Z ]{5,40}?)(?:\s+MFD|\s+MFG|\s+MRP|\s+NET)/);
+      const m = filtered.match(/(?:\d{5}[A-Z0-9-]+)\s+([A-Z ]{5,40}?)(?:\s+MFD|\s+MFG|\s+MRP|\s+NET)/);
       if (m) name = m[1].trim();
     }
+    if (name.length < 4) name = 'GENUINE PART';
     return {
       name: name || (codeMatch? codeMatch[1] : clean.slice(0, 25)),
-      price: mrpMatch? mrpMatch[1].replace(/,/g,'') : '2020',
+      price: mrpMatch? mrpMatch[1].replace(/,/g,'') : '',
       qty: qtyMatch? qtyMatch[1] : '1',
       code: codeMatch?.[1]?.replace(/\s/g,'') || clean.slice(0, 16)
     };
   };
 
   const applyParsedPart = (raw: string) => {
-    if (!canAddParts) { alert('Nangmah parts add thei lo - Manager or Accountant or Mechanic chauh'); return; }
+    if (!canAddParts) { alert('Parts add thei lo'); return; }
     const parsed = parseHondaQR(raw);
     setQr(raw);
     setPendingPart((prev:any) => ({
       code: parsed.code || prev?.code || raw.slice(0,16),
       name: parsed.name && parsed.name.length > 3? parsed.name : (prev?.name || parsed.name),
-      price: parsed.price!== '150' && parsed.price!== '2020'? parsed.price : (prev?.price || parsed.price),
+      price: parsed.price || prev?.price || '150',
       qty: parsed.qty
     }));
-    setPName((prev) => parsed.name && parsed.name.length > 3? parsed.name : prev || parsed.name);
-    setPPrice((prev) => parsed.price && parsed.price!== '150'? parsed.price : prev);
+    if(parsed.name && parsed.name!== 'GENUINE PART') setPName(parsed.name);
+    if(parsed.price) setPPrice(parsed.price);
     setPQty(parsed.qty);
     setShowPartConfirm(true);
     setScanStatus(`Part: ${parsed.code} - ${parsed.name} - ₹${parsed.price}`);
@@ -185,41 +184,53 @@ export default function StaffPage() {
 
   const handleQr = async (code: string) => {
     if (!code) return;
-    setQr(code);
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
+
+    const cleanCode = code.trim().toUpperCase().split(/[\s\n]+/)[0].replace(/[^A-Z0-9-]/g,'');
+    if (cleanCode.length < 3) { isProcessingRef.current = false; return; }
+
+    setQr(cleanCode);
     const sup = getSupabase();
+
     if (mode === 'service') {
-      if (!canCompleteService &&!canViewService) { alert('Service hmu thei lo'); return; }
-      const s = service.find((x: any) => x.qr_code === code || code.includes(x.qr_code) || x.qr_code.includes(code));
+      if (!canCompleteService &&!canViewService) { alert('Service hmu thei lo'); isProcessingRef.current = false; return; }
+      const s = service.find((x: any) => x.qr_code === cleanCode || code.includes(x.qr_code) || x.qr_code?.includes(cleanCode));
       if (s) {
-        if (s.status === 'completed') { alert('Already Completed - ' + s.customer_name); return; }
-        setCompletingService(s); setCompletePrice(String(s.amount && s.amount > 0? s.amount : 500)); setScanStatus(`Service: ${s.customer_name}`); stopCam(); return;
+        if (s.status === 'completed') { alert('Already Completed - ' + s.customer_name); isProcessingRef.current = false; return; }
+        setCompletingService(s); setCompletePrice(String(s.amount && s.amount > 0? s.amount : 500)); setScanStatus(`Service: ${s.customer_name}`); await stopCam(); isProcessingRef.current = false; return;
       }
-      const { data } = await sup.from('service_bookings').select('*').eq('qr_code', code).maybeSingle();
-      if (data) { setCompletingService(data); setCompletePrice(String(data.amount && data.amount > 0? data.amount : 500)); stopCam(); return; }
-      alert('Service hmuh loh - QR: ' + code);
+      const { data } = await sup.from('service_bookings').select('*').eq('qr_code', cleanCode).maybeSingle();
+      if (data) { setCompletingService(data); setCompletePrice(String(data.amount && data.amount > 0? data.amount : 500)); await stopCam(); isProcessingRef.current = false; return; }
+      alert('Service hmuh loh - QR: ' + cleanCode);
+      isProcessingRef.current = false;
+      return;
     } else if (mode === 'vehicle') {
-      if (!canAddVehicle) { alert('Vehicle add thei lo'); return; }
-      setVChassis(code); stopCam(); setTab('stock');
+      if (!canAddVehicle) { alert('Vehicle add thei lo'); isProcessingRef.current = false; return; }
+      setVChassis(cleanCode); await stopCam(); setTab('stock'); isProcessingRef.current = false; return;
     } else {
-      const partNo = code.trim().toUpperCase().split(/[\s\n]+/)[0].replace(/[^A-Z0-9-]/g,'');
-      const existing = inv.find((x:any) => x.part_no === partNo || x.name.includes(partNo));
-      if (existing) {
-        setPendingPart({ code: partNo, name: existing.name, price: String(existing.price), qty: '1' });
-        setPName(existing.name); setPPrice(String(existing.price)); setPQty('1');
-        setShowPartConfirm(true); stopCam(); return;
-      }
-      setPendingPart({ code: partNo, name: 'GENUINE PART', price: '150', qty: '1' });
-      setPName('GENUINE PART'); setPPrice('150'); setPQty('1');
-      setShowPartConfirm(true);
-      setScanStatus(`QR: ${partNo} - Now reading MRP from label...`);
-      const video = document.querySelector(`#${qrRegionId} video`) as HTMLVideoElement;
-      if (video && ocrWorkerRef.current) {
-        const canvas = canvasRef.current!;
-        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-        canvas.getContext('2d')!.drawImage(video, 0, 0);
-        setTimeout(() => runOcrOnImage(canvas), 300);
-      }
-      stopCam();
+      // PARTS - DB atangin fresh zawng - loop fix
+      try {
+        await stopCam();
+        const { data: invData } = await sup.from('inventory').select('*').eq('part_no', cleanCode).maybeSingle();
+        if (invData) {
+          setPendingPart({ code: invData.part_no, name: invData.name, price: String(invData.price), qty: '1' });
+          setPName(invData.name); setPPrice(String(invData.price)); setPQty('1');
+          setShowPartConfirm(true);
+          setScanStatus(`Found in DB: ${invData.name} - ₹${invData.price}`);
+          setTimeout(()=>{ isProcessingRef.current = false; }, 2000);
+          return;
+        }
+        // A awm lo chuan thar
+        const parsed = parseHondaQR(code);
+        setPendingPart({ code: cleanCode, name: parsed.name!== 'GENUINE PART'? parsed.name : 'GENUINE PART', price: parsed.price || '150', qty: '1' });
+        setPName(parsed.name!== 'GENUINE PART'? parsed.name : '');
+        setPPrice(parsed.price || '150');
+        setPQty('1');
+        setShowPartConfirm(true);
+        setScanStatus(`New: ${cleanCode} - Manual add ngai`);
+      } catch(e) {}
+      setTimeout(()=>{ isProcessingRef.current = false; }, 2000);
     }
   };
 
@@ -289,6 +300,7 @@ export default function StaffPage() {
 
   const startCam = async (m: string) => {
     if (isStartingRef.current) return; isStartingRef.current = true;
+    isProcessingRef.current = false;
     setMode(m); setScanning(true); setScanStatus('Camera opening...');
     if (html5QrCodeRef.current) { try { await html5QrCodeRef.current.stop(); } catch {} try { await html5QrCodeRef.current.clear(); } catch {} html5QrCodeRef.current = null; }
     setTimeout(async () => {
@@ -302,10 +314,14 @@ export default function StaffPage() {
       isStartingRef.current = false;
     }, 250);
   };
+
   const stopCam = async () => {
     setScanning(false);
-    if (html5QrCodeRef.current) { try { await html5QrCodeRef.current.stop(); } catch {} try { await html5QrCodeRef.current.clear(); } catch {} html5QrCodeRef.current = null; }
-    if (videoRef.current?.srcObject) { (videoRef.current.srcObject as MediaStream).getTracks().forEach((t: any) => t.stop()); }
+    if (html5QrCodeRef.current) {
+      try { if ((html5QrCodeRef.current as any).isScanning) await html5QrCodeRef.current.stop(); } catch {}
+      try { await html5QrCodeRef.current.clear(); } catch {}
+      html5QrCodeRef.current = null;
+    }
   };
 
   const confirmCompleteWithPrice = async () => {
@@ -314,14 +330,14 @@ export default function StaffPage() {
     const sup = getSupabase();
     await sup.from('service_bookings').update({ status: 'completed', amount: Number(completePrice || 0) }).eq('id', completingService.id);
     await sup.from('transactions').insert([{ type: 'lut', amount: Number(completePrice || 0), reason: completingService.customer_name + ' - ' + completingService.service_type + ' - Rs ' + completePrice + ' - ' + dMode + ' - BY ' + staff.staff_name }]);
-    setCompletingService(null); setCompletePrice('500'); stopCam(); load(); setTab('service'); alert('COMPLETED - Rs ' + completePrice);
+    setCompletingService(null); setCompletePrice('500'); await stopCam(); await load(); setTab('service'); alert('COMPLETED - Rs ' + completePrice);
   };
   const addDawn = async () => {
     if (!canAddDawn) { alert('Dawn add thei lo'); return; }
     if (!dAmt ||!dReason) { alert('Amount leh Reason fill rawh'); return; }
     const sup = getSupabase();
     await sup.from('transactions').insert([{ type: 'lut', amount: Number(dAmt), reason: (dCust? dCust + ' - ' : '') + dReason + ' - ' + dMode + ' - BY ' + staff.staff_name }]);
-    load(); setDAmt(''); setDReason(''); setDCust(''); setTab('dawn'); alert('Dawn added!');
+    await load(); setDAmt(''); setDReason(''); setDCust(''); setTab('dawn'); alert('Dawn added!');
   };
   const addVeh = async () => {
     if (!canAddVehicle) { alert('Vehicle add thei lo'); return; }
@@ -330,21 +346,30 @@ export default function StaffPage() {
     const existing = veh.find((item: any) => item.chassis_no && item.chassis_no.toLowerCase() === (vChassis || '').toLowerCase());
     if (existing) { await sup.from('vehicle_inventory').update({ stock: existing.stock + Number(vQty || 1), price: Number(vPrice || existing.price) }).eq('id', existing.id); }
     else { await sup.from('vehicle_inventory').insert([{ vehicle_type: vCat, model_name: vModel, chassis_no: vChassis, engine_no: vEngine, color: vColor, stock: Number(vQty || 1), price: Number(vPrice || 0) }]); }
-    setVModel(''); setVChassis(''); setVEngine(''); setVPrice(''); setVQty('1'); load(); alert('Vehicle added!');
+    setVModel(''); setVChassis(''); setVEngine(''); setVPrice(''); setVQty('1'); await load(); alert('Vehicle added!');
   };
+
   const addPart = async () => {
     if (!canAddParts) { alert('Parts add thei lo'); return; }
-    if (!pName) return;
+    if (!pName) { alert('Name fill rawh'); return; }
     const sup = getSupabase();
-    const fullName = pendingPart?.code? `${pendingPart.code} - ${pName}` : pName;
-    const existing = inv.find((x: any) => x.category === cat && x.name.toLowerCase() === fullName.toLowerCase());
-    if (existing) { await sup.from('inventory').update({ stock: existing.stock + Number(pQty || 1), price: Number(pPrice || existing.price), name: fullName }).eq('id', existing.id); }
-    else {
-      try { await sup.from('inventory').insert([{ name: fullName, part_no: pendingPart?.code || '', category: cat, stock: Number(pQty), price: Number(pPrice || 0) }]); }
-      catch { await sup.from('inventory').insert([{ name: fullName, category: cat, stock: Number(pQty), price: Number(pPrice || 0) }]); }
+    const scannedNo = pendingPart?.code || qr; // 12312412 kha heihi
+    // part_no nen save - database ah awm nghal
+    try {
+      const { data: existing } = await sup.from('inventory').select('*').eq('part_no', scannedNo).maybeSingle();
+      if (existing) {
+        await sup.from('inventory').update({ stock: existing.stock + Number(pQty || 1), price: Number(pPrice || existing.price), name: pName, part_no: scannedNo }).eq('id', existing.id);
+      } else {
+        await sup.from('inventory').insert([{ name: pName, part_no: scannedNo, category: cat, stock: Number(pQty || 1), price: Number(pPrice || 0) }]);
+      }
+    } catch {
+      // part_no column a awm loh chuan
+      await sup.from('inventory').insert([{ name: `${scannedNo} - ${pName}`, category: cat, stock: Number(pQty || 1), price: Number(pPrice || 0) }]);
     }
-    setShowPartConfirm(false); setPendingPart(null); setPName(''); setPPrice('150'); setPQty('1'); load(); setTab('parts'); alert('Part added!');
+    setShowPartConfirm(false); setPendingPart(null); setPName(''); setPPrice('150'); setPQty('1'); await load(); setTab('parts'); isProcessingRef.current = false;
+    alert(`Saved! ${scannedNo} - DB ah awm tawh, nakin ah auto a ni ang!`);
   };
+
   const outPart = async () => {
     if (!canSellParts) { alert('Parts sell thei lo'); return; }
     const sup = getSupabase();
@@ -353,7 +378,7 @@ export default function StaffPage() {
     const qty = Number(outQty || 1);
     await sup.from('inventory').update({ stock: Math.max(0, p.stock - qty) }).eq('id', p.id);
     await sup.from('transactions').insert([{ type: 'lut', amount: Number(p.price) * qty, reason: (outReason || 'PARTS SALE') + ' - ' + p.name + ' - ' + dMode + ' - BY ' + staff.staff_name }]);
-    setOutId(''); setOutQty('1'); setOutReason(''); load(); setTab('dawn'); alert('Part sold!');
+    setOutId(''); setOutQty('1'); setOutReason(''); await load(); setTab('dawn'); alert('Part sold!');
   };
 
   if (!logged) {
@@ -406,20 +431,24 @@ export default function StaffPage() {
       {showPartConfirm && pendingPart && (
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-xl flex items-center justify-center p-6">
           <div className="bg-[#1a1a1a] border border-green-500/30 rounded-xl p-6 w-full max-w-sm">
-            <h3 className="font-black text-green-400 mb-1">PARTS IN - CONFIRM</h3>
-            <p className="font-mono opacity-40 mb-3 text-">QR: {pendingPart.code} {ocrReady? '(OCR Fast)' : '(Loading...)'}</p>
+            <h3 className="font-black text-green-400 mb-1">PARTS IN - SCANNED QR</h3>
+            <p className="font-mono opacity-60 mb-3 text-">QR: {pendingPart.code} {ocrReady? '(OCR Ready)' : ''}</p>
             <div className="space-y-2 mb-3">
-              <div><p className="opacity-50 text-">PART NO</p><p className="font-mono font-black text-xs bg-black p-2 rounded border border-white/10">{pendingPart.code}</p></div>
-              <div><p className="opacity-50 text-">NAME</p><input value={pName} onChange={(e) => setPName(e.target.value)} className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
+              <div>
+                <p className="opacity-50 text- font-bold">SCANNED PART NO - DB AH SAVE TUR</p>
+                <p className="font-mono font-black text-sm bg-yellow-500/20 border border-yellow-500/50 p-3 rounded-xl text-yellow-300">{pendingPart.code}</p>
+              </div>
+              <div><p className="opacity-50 text-">NAME *</p><input value={pName} onChange={(e) => setPName(e.target.value)} placeholder="Eg: REGULATOR RECTIFIER" className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" autoFocus /></div>
               <div className="grid grid-cols-2 gap-2">
-                <div><p className="opacity-50 text-">PRICE MRP</p><input value={pPrice} onChange={(e) => setPPrice(e.target.value)} type="number" className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
+                <div><p className="opacity-50 text-">PRICE MRP *</p><input value={pPrice} onChange={(e) => setPPrice(e.target.value)} type="number" className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
                 <div><p className="opacity-50 text-">QTY</p><input value={pQty} onChange={(e) => setPQty(e.target.value)} type="number" className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => { setShowPartConfirm(false); setPendingPart(null); }} className="bg-white/10 py-3 rounded-xl font-black text-xs">CANCEL</button>
-              <button onClick={addPart} className="bg-green-500 text-black py-3 rounded-xl font-black text-xs">CONFIRM + ADD</button>
+              <button onClick={() => { setShowPartConfirm(false); setPendingPart(null); isProcessingRef.current = false; }} className="bg-white/10 py-3 rounded-xl font-black text-xs">CANCEL</button>
+              <button onClick={addPart} className="bg-green-500 text-black py-3 rounded-xl font-black text-xs">SAVE TO DB</button>
             </div>
+            <p className="text- opacity-30 mt-2 text-center">He part no hi DB ah awm nghal ang - nakin ah auto</p>
           </div>
         </div>
       )}
@@ -476,16 +505,15 @@ export default function StaffPage() {
                     <button onClick={captureFrameAndOcr} disabled={!scanning || ocrLoading} className="w-full bg-yellow-500 disabled:opacity-30 text-black py-3 font-black text-xs rounded-xl">{ocrLoading? `${ocrProgress}% OCR...` : '📸 CAPTURE + OCR'}</button>
                   </div>
                   <div className="p-3 space-y-2 border-t border-white/5 bg-black/20">
-                    <div className="flex gap-2"><input value={qr} onChange={(e) => setQr(e.target.value)} placeholder="QR Manual" className="flex-1 bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs font-mono" /><button onClick={() => handleQr(qr)} className="bg-white text-black px-5 rounded-xl font-black text-xs">USE</button></div>
+                    <div className="flex gap-2"><input value={qr} onChange={(e) => setQr(e.target.value)} placeholder="QR Manual e.g. 12312412" className="flex-1 bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs font-mono" /><button onClick={() => handleQr(qr)} className="bg-white text-black px-5 rounded-xl font-black text-xs">USE</button></div>
                     <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 space-y-2">
-                      <div className="flex justify-between"><p className="text- font-black uppercase tracking-[0.2em] text-yellow-400">OCR - Honda Label - QR + MRP Combined</p><p className="text- text-white/40">{ocrLoading? `Reading ${ocrProgress}%` : scanStatus}</p></div>
+                      <div className="flex justify-between"><p className="text- font-black uppercase tracking-[0.2em] text-yellow-400">OCR - Honda Label</p><p className="text- text-white/40">{ocrLoading? `Reading ${ocrProgress}%` : scanStatus}</p></div>
                       <div className="flex gap-2">
                         <button onClick={() => fileInputRef.current?.click()} className="flex-1 bg-white/10 py-3 rounded-xl font-black text-xs">📁 UPLOAD PHOTO</button>
                         <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileOcr} className="hidden" />
                         <button onClick={performManualOcr} className="bg-emerald-500 text-black px-5 rounded-xl font-black text-xs">PARSE</button>
                       </div>
-                      <textarea value={ocrText} onChange={(e) => setOcrText(e.target.value)} placeholder="OCR text hetah a lo lang ang... MRP, Part No" className="w-full h-24 bg-black border border-white/10 p-3 rounded-xl text-xs font-mono" />
-                      {ocrLoading && <div className="h-1 bg-white/10 rounded-full overflow-hidden"><div className="h-full bg-yellow-500 transition-all" style={{ width: `${ocrProgress}%` }}></div></div>}
+                      <textarea value={ocrText} onChange={(e) => setOcrText(e.target.value)} placeholder="OCR text hetah a lo lang ang..." className="w-full h-24 bg-black border border-white/10 p-3 rounded-xl text-xs font-mono" />
                     </div>
                     <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text- uppercase tracking-[0.2em] text-cyan-300">Status: {scanStatus}</div>
                   </div>
@@ -514,8 +542,7 @@ export default function StaffPage() {
               {tab === 'parts' && canViewParts && (
                 <div className="space-y-3">
                   <div className="flex gap-2"><button onClick={() => setCat('bike')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'bike'? 'bg-white text-black' : 'bg-white/5'}`}>BIKE</button><button onClick={() => setCat('scooty')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'scooty'? 'bg-white text-black' : 'bg-white/5'}`}>SCOOTY</button><button onClick={() => setCat('parts')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'parts'? 'bg-white text-black' : 'bg-white/5'}`}>PARTS</button></div>
-                  {canAddParts && (<div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4"><div className="grid grid-cols-2 gap-2"><input value={pName} onChange={(e) => setPName(e.target.value)} placeholder="Part Name" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /><input value={pPrice} onChange={(e) => setPPrice(e.target.value)} type="number" placeholder="MRP" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /><input value={pQty} onChange={(e) => setPQty(e.target.value)} type="number" placeholder="Qty" className="col-span-2 bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /><button onClick={addPart} className="col-span-2 bg-green-500 text-black py-3 rounded-xl font-black text-xs">+ ADD PART</button></div></div>)}
-                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h- overflow-auto">{inv.filter((x: any) => x.category === cat).map((v: any) => (<div key={v.id} className="p-3 flex justify-between items-center"><div><p className="font-black text-xs">{v.name}</p><p className="text-xs opacity-40">Stock: {v.stock} | Rs {v.price}</p></div>{canSellParts && (<button onClick={() => setOutId(v.id)} className="bg-white text-black px-3 py-1 rounded-full text-xs font-black">SELL</button>)}</div>))}</div>
+                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h- overflow-auto">{inv.filter((x: any) => x.category === cat).map((v: any) => (<div key={v.id} className="p-3 flex justify-between items-center"><div><p className="font-black text-xs">{v.part_no? `${v.part_no} - ` : ''}{v.name}</p><p className="text-xs opacity-40">Stock: {v.stock} | Rs {v.price}</p></div>{canSellParts && (<button onClick={() => setOutId(v.id)} className="bg-white text-black px-3 py-1 rounded-full text-xs font-black">SELL</button>)}</div>))}</div>
                 </div>
               )}
               {tab === 'dawn' && canAddDawn && (
@@ -528,7 +555,7 @@ export default function StaffPage() {
                 <div className="space-y-3"><div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h- overflow-auto">{service.map((item: any) => (<div key={item.id} className="p-3"><p className="font-black text-xs">{item.customer_name} | {item.model_name}</p><p className="text-xs opacity-40">{item.service_type} | {item.status} | ₹{item.amount || 'Pending'}</p>{item.status!== 'completed' && canCompleteService && (<button onClick={() => setCompletingService(item)} className="mt-2 bg-green-500 text-black px-3 py-1 rounded-full text- font-black">COMPLETE</button>)}</div>))}</div></div>
               )}
               {tab === 'transactions' && canViewMyTransactions && (
-                <div className="space-y-3"><div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4"><p className="font-black text-xs mb-3">MY WORK - ₹{myTotal.toLocaleString()}</p><p className="text- opacity-40 mb-3">Transactions with your name</p><div className="divide-y divide-white/5 max-h- overflow-auto">{myTrans.map((t: any) => (<div key={t.id} className="p-3"><p className="font-black text-xs">₹{Number(t.amount || 0).toLocaleString()} - {t.reason}</p><p className="text-xs opacity-40">{new Date(t.created_at).toLocaleString()}</p></div>))}{myTrans.length === 0 && <p className="text-xs opacity-30 p-3">No transactions yet!</p>}</div></div></div>
+                <div className="space-y-3"><div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4"><p className="font-black text-xs mb-3">MY WORK - ₹{myTotal.toLocaleString()}</p><div className="divide-y divide-white/5 max-h- overflow-auto">{myTrans.map((t: any) => (<div key={t.id} className="p-3"><p className="font-black text-xs">₹{Number(t.amount || 0).toLocaleString()} - {t.reason}</p><p className="text-xs opacity-40">{new Date(t.created_at).toLocaleString()}</p></div>))}{myTrans.length === 0 && <p className="text-xs opacity-30 p-3">No transactions yet!</p>}</div></div></div>
               )}
             </div>
           </div>
