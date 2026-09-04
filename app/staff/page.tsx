@@ -2,14 +2,27 @@
 import { useState, useRef, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Html5Qrcode } from 'html5-qrcode';
-import jsQR from 'jsqr'; // Added for static QR detection
+import jsQR from 'jsqr';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
-const getSupabase = () => supabase;
+// FIX: Lazy initialization to prevent build crash if env vars missing
+let supabaseInstance: any = null;
+const getSupabase = () => {
+  if (!supabaseInstance) {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+    if (url && key) {
+      supabaseInstance = createClient(url, key, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+    } else {
+      console.warn('Supabase env vars missing. Set them in Vercel!');
+      supabaseInstance = createClient('https://placeholder.supabase.co', 'placeholder-anon-key', {
+        auth: { persistSession: false, autoRefreshToken: false }
+      });
+    }
+  }
+  return supabaseInstance;
+};
 
 export default function StaffPage() {
   const [phone, setPhone] = useState('');
@@ -97,8 +110,12 @@ export default function StaffPage() {
     const initWorker = async () => {
       try {
         const { createWorker } = await import('tesseract.js');
+        // FIX: Added CDN paths to bypass Vercel's allow-scripts blocking
         const worker = await createWorker('eng', 1, {
-          logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); }
+          logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); },
+          workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+          corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5',
+          langPath: 'https://tessdata.projectnaptha.com/4.0.0'
         });
         await worker.setParameters({
           tessedit_pageseg_mode: '11' as any
@@ -323,7 +340,6 @@ export default function StaffPage() {
         const qrCode = jsQR(imageData.data, imageData.width, imageData.height);
 
         if (qrCode && qrCode.data) {
-          // QR awm ta - a data hmang lawk rawh, OCR skip
           URL.revokeObjectURL(url);
           handleQr(qrCode.data);
           return; // finally block will setOcrLoading(false)
@@ -369,12 +385,10 @@ export default function StaffPage() {
     const qrCode = jsQR(imageData.data, imageData.width, imageData.height);
     
     if (qrCode && qrCode.data) {
-      // QR awm ta - a data hmang lawk rawh, OCR skip
       handleQr(qrCode.data);
       return;
     }
 
-    // QR awm loh chuan normal OCR a kal zel ang
     await runOcrOnImage(canvas);
   };
 
@@ -590,7 +604,7 @@ export default function StaffPage() {
                   <div className="p-3 space-y-2 border-t border-white/5 bg-black/20">
                     <div className="flex gap-2"><input value={qr} onChange={(e) => setQr(e.target.value)} placeholder="QR Manual e.g. 12312412" className="flex-1 bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs font-mono" /><button onClick={() => handleQr(qr)} className="bg-white text-black px-5 rounded-xl font-black text-xs">USE</button></div>
                     <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 space-y-2">
-                      <div className="flex justify-between"><p className="text- font-black uppercase tracking-[0.2em] text-yellow-400">OCR - Honda Label</p><p className="text- text-white/40">{ocrLoading? `Reading ${ocrProgress}%` : scanStatus}</p></div>
+                      <div className="flex justify-between"><p className="text- font-black uppercase tracking-[0.2em] text-yellow-400">OCR - Hero Label</p><p className="text- text-white/40">{ocrLoading? `Reading ${ocrProgress}%` : scanStatus}</p></div>
                       <div className="flex gap-2">
                         <button onClick={() => fileInputRef.current?.click()} className="flex-1 bg-white/10 py-3 rounded-xl font-black text-xs">📁 UPLOAD PHOTO</button>
                         <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileOcr} className="hidden" />

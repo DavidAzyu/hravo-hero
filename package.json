@@ -37,5 +37,9 @@
   "devDependencies": {
     "browserslist": "^4.28.8",
     "caniuse-lite": "^1.0.30001810"
+  },
+  "allowScripts": {
+    "tesseract.js@7.0.0": true,
+    "unrs-resolver@1.12.2": true
   }
 }
