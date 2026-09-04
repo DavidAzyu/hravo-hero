@@ -4,7 +4,6 @@ import { createClient as SC } from '@supabase/supabase-js';
 import { Html5Qrcode } from 'html5-qrcode';
 
 // SINGLETON SUPABASE - fixes GoTrueClient multiple instances warning
-// SECURITY: env-only, no hardcoded fallbacks (set in .env.local / Vercel)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = SC(supabaseUrl, supabaseKey, {
@@ -12,10 +11,6 @@ const supabase = SC(supabaseUrl, supabaseKey, {
 });
 const getSupabase = () => supabase;
 
-// SECURITY: no hardcoded password fallback. Admin password is verified
-// server-side via verify_admin_password() RPC (supabase/security-hardening.sql).
-// ADMIN_PASSWORD env var is only the legacy fallback until the SQL is applied -
-// remove NEXT_PUBLIC_ADMIN_PASSWORD from env vars once the SQL is live.
 const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || '';
 
 const verifyAdminPassword = async (pw: string): Promise<'ok' | 'bad' | 'unconfigured'> => {
@@ -26,7 +21,6 @@ const verifyAdminPassword = async (pw: string): Promise<'ok' | 'bad' | 'unconfig
   if (ADMIN_PASSWORD !== '') {
     return pw === ADMIN_PASSWORD ? 'ok' : 'bad';
   }
-  // Neither the RPC (SQL not run) nor the env var is configured on this deploy.
   return 'unconfigured';
 };
 
@@ -42,9 +36,7 @@ const readLocalList = (key: string, fallback: any[] = []) => {
 const writeLocalList = (key: string, value: any[]) => {
   try {
     localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // no-op if storage is unavailable
-  }
+  } catch {}
 };
 
 export default function AdminPage() {
@@ -59,15 +51,13 @@ export default function AdminPage() {
   const [staff, setStaff] = useState<any[]>([]);
   const [service, setService] = useState<any[]>([]);
   const [insure, setInsure] = useState<any[]>([]);
-  const [rides, setRides] = useState<any[]>([]); // NEW - Ride / test-drive bookings
+  const [rides, setRides] = useState<any[]>([]);
   const [qr, setQr] = useState('');
   const [mode, setMode] = useState('in');
   const [scanning, setScanning] = useState(false);
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const qrRegionId = "qr-reader-full";
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    // Lazy init from localStorage (client-only - SSR gets false and the login
-    // screen shows until the page hydrates).
     if (typeof window === 'undefined' || !window.localStorage) return false;
     try {
       return window.localStorage.getItem('honda_admin_auth') === 'true';
@@ -89,7 +79,7 @@ export default function AdminPage() {
   const [vColor, setVColor] = useState('Black');
   const [vPrice, setVPrice] = useState('');
   const [vQty, setVQty] = useState('1');
-  const [vImage, setVImage] = useState(''); // NEW - vehicle image URL (Cloudinary upload)
+  const [vImage, setVImage] = useState('');
   const [cName, setCName] = useState('');
   const [cPhone, setCPhone] = useState('');
   const [cAddr, setCAddr] = useState('');
@@ -199,6 +189,18 @@ export default function AdminPage() {
   const [selectedBill, setSelectedBill] = useState<any>(null);
   const [showBillPrint, setShowBillPrint] = useState(false);
 
+  // OCR STATE
+  const [ocrText, setOcrText] = useState('');
+  const [scanStatus, setScanStatus] = useState('Ready');
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const isStartingRef = useRef(false);
+  const isProcessingRef = useRef(false);
+  const ocrWorkerRef = useRef<any>(null);
+  const [ocrReady, setOcrReady] = useState(false);
+
   const load = async () => {
     const sup = getSupabase();
 
@@ -255,7 +257,6 @@ export default function AdminPage() {
     }
 
     try {
-      // SECURITY: password column is not publicly readable after security-hardening.sql
       const d = await sup.from('staff_profiles').select('id, staff_name, phone, role, salary, address, created_at').order('created_at', { ascending: false });
       if (d.data) {
         setStaff(d.data);
@@ -274,7 +275,6 @@ export default function AdminPage() {
         setCust(e.data);
         writeLocalList('hravo_customer_profiles', e.data);
       } else if (e.data && e.data.length === 0) {
-        // if supabase empty, show local if exists
         const local = readLocalList('hravo_customer_profiles');
         setCust(local.length > 0 ? local : []);
       } else {
@@ -300,15 +300,35 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    // Data fetch on mount. load() is async and only calls setState AFTER its
-    // `await ...` calls resolve, so nothing is set synchronously in this effect.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
     return () => {
       if (html5QrCodeRef.current) {
         html5QrCodeRef.current.stop().catch(()=>{}).finally(()=> html5QrCodeRef.current?.clear());
       }
     }
+  }, []);
+
+  // INIT OCR WORKER
+  useEffect(() => {
+    const initWorker = async () => {
+      try {
+        const { createWorker } = await import('tesseract.js');
+        const worker = await createWorker('eng', 1, {
+          logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); }
+        });
+        await worker.setParameters({
+          tessedit_pageseg_mode: 6 as any,
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-₹. '
+        });
+        ocrWorkerRef.current = worker;
+        setOcrReady(true);
+        setScanStatus('OCR Ready Fast');
+      } catch {}
+    };
+    initWorker();
+    return () => {
+      if (ocrWorkerRef.current) { ocrWorkerRef.current.terminate(); }
+    };
   }, []);
 
   const handleLogin = async () => {
@@ -329,58 +349,185 @@ export default function AdminPage() {
   };
 
   const parseHondaQR = (val: string) => {
-    const upper = val.toUpperCase();
+    const clean = val.replace(/\n/g, ' ').replace(/\s+/g, ' ').toUpperCase();
+    const garbage = ['AL', 'ETC', 'LL', 'TT'];
+    let filtered = clean;
+    garbage.forEach(g => { filtered = filtered.replace(new RegExp(`\\b${g}\\b`, 'g'), '') });
+    // Improved part number extraction
+    let codeMatch = filtered.match(/(\d{5}[A-Z0-9\-]{4,})/) 
+      || filtered.match(/(\d{5}[A-Z]{2,5}\d*[A-Z0-9-]*)/)
+      || filtered.match(/(9\d{4}[A-Z0-9\-]+)/)
+      || filtered.match(/(\d{5,12})/);
+    const mrpMatch = filtered.match(/₹\s*([\d,]+\.?\d*)/) || filtered.match(/MRP[^0-9]*([\d,]+\.?\d*)/i) || filtered.match(/(\d{3,5}\.00)/);
+    const qtyMatch = filtered.match(/QUANTITY:\s*(\d+)/i) || filtered.match(/QTY\s*(\d+)/i);
     let name = '';
-    let price = '';
-    let qty = '1';
-    if (upper.includes('SEAL OIL')) name = 'SEAL OIL';
-    else if (upper.includes('AIR FILTER')) name = 'AIR FILTER';
-    else if (upper.includes('BRAKE SHOE')) name = 'BRAKE SHOE';
-    else if (upper.includes('SPARK PLUG')) name = 'SPARK PLUG';
+    if (filtered.includes('REGULATOR')) name = 'REGULATOR RECTIFIER COMPLETE';
+    else if (filtered.includes('SEAL OIL')) name = 'SEAL OIL';
+    else if (filtered.includes('AIR FILTER')) name = 'AIR FILTER';
+    else if (filtered.includes('BRAKE SHOE')) name = 'BRAKE SHOE';
+    else if (filtered.includes('SPARK PLUG')) name = 'SPARK PLUG';
     else {
-      const nameMatch = val.match(/([A-Z ]{3,})\s*B\. NO/i) || val.match(/^\S+\s+([A-Z ]+OIL)/i);
-      if (nameMatch) name = nameMatch[1].trim();
+      const m = filtered.match(/(?:\d{5}[A-Z0-9-]+)\s+([A-Z ]{5,40}?)(?:\s+MFD|\s+MFG|\s+MRP|\s+NET)/);
+      if (m) name = m[1].trim();
     }
-    const mrpMatch = val.match(/MRP.*?₹?\s*([\d,]+\.?\d*)/i) || val.match(/₹\s*([\d,]+\.?\d*)/i) || val.match(/MRP\s*(\d+)/i);
-    if (mrpMatch) price = mrpMatch[1].replace(/,/g, '');
-    const qtyMatch = val.match(/QUANTITY:\s*(\d+)/i) || val.match(/QTY\s*(\d+)/i);
-    if (qtyMatch) qty = qtyMatch[1];
-    const codeMatch = val.match(/(9\d{4}[A-Z0-9]+)/);
-    return { name: name || (codeMatch? codeMatch[1] : val.slice(0,20)), price: price || '150', qty, code: codeMatch?.[1] || val.slice(0,14) };
+    if (name.length < 4) name = 'GENUINE PART';
+    return {
+      name: name || (codeMatch? codeMatch[1] : clean.slice(0, 25)),
+      price: mrpMatch? mrpMatch[1].replace(/,/g,'') : '',
+      qty: qtyMatch? qtyMatch[1] : '1',
+      code: codeMatch?.[1]?.replace(/\s/g,'') || clean.slice(0, 16)
+    };
   };
 
+  const applyParsedPart = (raw: string) => {
+    const parsed = parseHondaQR(raw);
+    setQr(raw);
+    setPendingPart((prev:any) => ({
+      code: parsed.code || prev?.code || raw.slice(0,16),
+      name: parsed.name && parsed.name.length > 3? parsed.name : (prev?.name || parsed.name),
+      price: parsed.price || prev?.price || '150',
+      qty: parsed.qty
+    }));
+    if(parsed.name && parsed.name!== 'GENUINE PART') setPName(parsed.name);
+    if(parsed.price) setPPrice(parsed.price);
+    setPQty(parsed.qty);
+    setShowPartConfirm(true);
+    setScanStatus(`Part: ${parsed.code} - ${parsed.name} - ₹${parsed.price}`);
+  };
+
+  // Modified preprocessing: full image, no crop, improved threshold
+  const preprocessCanvas = (sourceCanvas: HTMLCanvasElement) => {
+    const out = document.createElement('canvas');
+    const maxDimension = 1200;
+    let scale = 1;
+    if (sourceCanvas.width > maxDimension || sourceCanvas.height > maxDimension) {
+      scale = maxDimension / Math.max(sourceCanvas.width, sourceCanvas.height);
+    }
+    out.width = sourceCanvas.width * scale;
+    out.height = sourceCanvas.height * scale;
+    const ctx = out.getContext('2d')!;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(sourceCanvas, 0, 0, out.width, out.height);
+    const imageData = ctx.getImageData(0, 0, out.width, out.height);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const blue = data[i+2];
+      const avg = (data[i] + data[i+1] + data[i+2]) / 3;
+      const v = (blue > 100 && avg > 70)? 255 : 0;
+      data[i] = data[i+1] = data[i+2] = v;
+    }
+    ctx.putImageData(imageData, 0, 0);
+    return out;
+  };
+
+  const runOcrOnImage = async (imageSource: any) => {
+    if (!ocrReady || !ocrWorkerRef.current) {
+      setScanStatus('OCR initialising, wait...');
+      return;
+    }
+    setOcrLoading(true); setOcrProgress(0);
+    let baseCanvas: HTMLCanvasElement;
+    try {
+      if (imageSource instanceof HTMLCanvasElement) { baseCanvas = imageSource; }
+      else if (imageSource instanceof File) {
+        const img = new Image();
+        const url = URL.createObjectURL(imageSource);
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+        baseCanvas = document.createElement('canvas');
+        const maxW = 900;
+        const sc = Math.min(1, maxW / img.width);
+        baseCanvas.width = img.width * sc; baseCanvas.height = img.height * sc;
+        baseCanvas.getContext('2d')!.drawImage(img, 0, 0, baseCanvas.width, baseCanvas.height);
+        URL.revokeObjectURL(url);
+      } else { baseCanvas = imageSource; }
+      const processed = preprocessCanvas(baseCanvas);
+      const { data: { text } } = await ocrWorkerRef.current.recognize(processed);
+      const cleaned = text.toUpperCase();
+      setOcrText(cleaned);
+      if (cleaned.trim().length > 5) applyParsedPart(cleaned);
+    } catch (e: any) { setScanStatus('OCR failed: ' + e.message); }
+    finally { setOcrLoading(false); }
+  };
+
+  const captureFrameAndOcr = async () => {
+    const video = document.querySelector(`#${qrRegionId} video`) as HTMLVideoElement;
+    if (!video) { alert('Camera on hmasa rawh'); return; }
+    const canvas = canvasRef.current!;
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    canvas.getContext('2d')!.drawImage(video, 0, 0);
+    await runOcrOnImage(canvas);
+  };
+
+  const handleFileOcr = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return; await runOcrOnImage(file);
+  };
+  const performManualOcr = () => { const clean = ocrText.trim(); if (!clean) return; applyParsedPart(clean); };
+
   const handleQrSuccess = (val: string) => {
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
     setQr(val);
+    const cleanCode = val.trim().toUpperCase().split(/[\s\n]+/)[0].replace(/[^A-Z0-9-]/g,'');
     if (mode === 'in') {
-      const parsed = parseHondaQR(val);
-      setPendingPart(parsed);
-      setPName(parsed.name);
-      setPPrice(parsed.price);
-      setPQty(parsed.qty);
-      setShowPartConfirm(true);
-      stopCam();
+      const sup = getSupabase();
+      sup.from('inventory').select('*').eq('part_no', cleanCode).maybeSingle().then(({data}) => {
+        if (data) {
+          setPendingPart({ code: data.part_no, name: data.name, price: String(data.price), qty: '1' });
+          setPName(data.name);
+          setPPrice(String(data.price));
+          setPQty('1');
+          setShowPartConfirm(true);
+          setScanStatus(`Found in DB: ${data.name}`);
+        } else {
+          const parsed = parseHondaQR(val);
+          setPendingPart({ code: cleanCode, name: parsed.name !== 'GENUINE PART' ? parsed.name : 'GENUINE PART', price: parsed.price || '150', qty: '1' });
+          setPName(parsed.name !== 'GENUINE PART' ? parsed.name : '');
+          setPPrice(parsed.price || '150');
+          setPQty('1');
+          setShowPartConfirm(true);
+          setScanStatus(`New: ${cleanCode} - Manual add ngai`);
+        }
+        isProcessingRef.current = false;
+        stopCam();
+      });
       return;
     }
     if (mode === 'out') {
-      const f = inv.find((x: any) => val.toLowerCase().includes(x.name.toLowerCase().slice(0, 4)) || (val.includes(x.name.slice(0,5))));
-      if (f) setOutId(f.id);
-      else {
-        const parsed = parseHondaQR(val);
-        const f2 = inv.find((x: any) => parsed.code && x.name.toLowerCase().includes(parsed.code.toLowerCase().slice(0,5)));
-        if (f2) setOutId(f2.id);
-      }
-      setTab('parts');
+      const sup = getSupabase();
+      sup.from('inventory').select('*').eq('part_no', cleanCode).maybeSingle().then(({data}) => {
+        if (data) setOutId(data.id);
+        isProcessingRef.current = false;
+        setTab('parts');
+        stopCam();
+      });
+      return;
     }
     if (mode === 'service') {
-      const s = service.find((x: any) => x.qr_code === val || val.includes(x.id.slice(0, 8)));
-      if (s) { setCompletingService(s); setCompletePrice(String(s.amount || 500)); }
+      const sup = getSupabase();
+      sup.from('service_bookings').select('*').eq('qr_code', cleanCode).maybeSingle().then(({data}) => {
+        if (data) {
+          setCompletingService(data);
+          setCompletePrice(String(data.amount || 500));
+          setScanStatus(`Service: ${data.customer_name}`);
+        } else {
+          alert('Service hmuh loh - QR: ' + cleanCode);
+        }
+        isProcessingRef.current = false;
+        stopCam();
+      });
+      return;
     }
+    isProcessingRef.current = false;
     stopCam();
   };
 
   const startCam = async (m: string) => {
+    if (isStartingRef.current) return;
+    isStartingRef.current = true;
+    isProcessingRef.current = false;
     setMode(m);
     setScanning(true);
+    setScanStatus('Camera opening...');
     if (html5QrCodeRef.current) {
       try { await html5QrCodeRef.current.stop(); } catch {}
       try { await html5QrCodeRef.current.clear(); } catch {}
@@ -388,25 +535,28 @@ export default function AdminPage() {
     }
     setTimeout(async () => {
       try {
+        const qrBoxSize = Math.min(window.innerWidth - 60, 250);
         const html5QrCode = new Html5Qrcode(qrRegionId);
         html5QrCodeRef.current = html5QrCode;
         await html5QrCode.start(
           { facingMode: "environment" },
-          { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 },
+          { fps: 10, qrbox: { width: qrBoxSize, height: qrBoxSize }, aspectRatio: 1.0 },
           (decodedText) => handleQrSuccess(decodedText),
           () => {}
         );
+        setScanStatus(ocrReady ? 'Camera live - OCR Fast Ready' : 'Camera live');
       } catch (err: any) {
         alert('Camera allow rawh - HTTPS ngai a nia. Error: ' + (err?.message || err));
         setScanning(false);
       }
+      isStartingRef.current = false;
     }, 300);
   };
 
   const stopCam = async () => {
     setScanning(false);
     if (html5QrCodeRef.current) {
-      try { await html5QrCodeRef.current.stop(); } catch {}
+      try { if ((html5QrCodeRef.current as any).isScanning) await html5QrCodeRef.current.stop(); } catch {}
       try { await html5QrCodeRef.current.clear(); } catch {}
       html5QrCodeRef.current = null;
     }
@@ -417,7 +567,7 @@ export default function AdminPage() {
     handleQrSuccess(qr);
   };
 
-  const uploadImage = async (e: any) => { // NEW
+  const uploadImage = async (e: any) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
@@ -440,27 +590,31 @@ export default function AdminPage() {
   const addPart = async () => {
     if (!pName) return;
     const sup = getSupabase();
-    const fullName = pendingPart?.code? `${pendingPart.code} - ${pName}` : pName;
-    const ex = inv.find((x: any) => x.name.toLowerCase() === fullName.toLowerCase() && x.category === cat || x.name.toLowerCase() === pName.toLowerCase() && x.category === cat);
-    if (ex) {
-      await sup.from('inventory').update({ stock: ex.stock + Number(pQty), price: Number(pPrice || ex.price), name: fullName }).eq('id', ex.id);
-    } else {
-      try {
-        await sup.from('inventory').insert([{ name: fullName, part_no: pendingPart?.code || '', category: cat, stock: Number(pQty), price: Number(pPrice || 0) }]);
-      } catch {
-        await sup.from('inventory').insert([{ name: fullName, category: cat, stock: Number(pQty), price: Number(pPrice || 0) }]);
+    const scannedNo = pendingPart?.code || qr;
+    try {
+      const { data: existing } = await sup.from('inventory').select('*').eq('part_no', scannedNo).maybeSingle();
+      if (existing) {
+        await sup.from('inventory').update({ stock: existing.stock + Number(pQty || 1), price: Number(pPrice || existing.price), name: pName, part_no: scannedNo }).eq('id', existing.id);
+      } else {
+        await sup.from('inventory').insert([{ name: pName, part_no: scannedNo, category: cat, stock: Number(pQty || 1), price: Number(pPrice || 0) }]);
       }
+    } catch {
+      await sup.from('inventory').insert([{ name: `${scannedNo} - ${pName}`, category: cat, stock: Number(pQty || 1), price: Number(pPrice || 0) }]);
     }
-    setPName(''); setShowPartConfirm(false); setPendingPart(null); load();
+    setPName(''); setShowPartConfirm(false); setPendingPart(null); setQr('');
+    isProcessingRef.current = false;
+    load();
   };
+
   const outPart = async () => {
     if (!outId) return;
     const sup = getSupabase();
     const p = inv.find((x: any) => x.id === outId);
     await sup.from('inventory').update({ stock: Math.max(0, p.stock - Number(outQty)) }).eq('id', p.id);
     await sup.from('transactions').insert([{ type: 'lut', amount: Number(p.price) * Number(outQty), reason: cat.toUpperCase() + ' ' + p.name }]);
-    setOutId(''); load();
+    setOutId(''); setOutQty('1'); load();
   };
+
   const addVeh = async () => {
     if (!vModel) return alert('Model');
     const sup = getSupabase();
@@ -499,10 +653,7 @@ export default function AdminPage() {
       writeLocalList('hravo_customer_profiles', updated);
       setCust(updated);
       setCName(''); setCPhone(''); setCModel(''); setCTotal(''); setCAdv(''); setCChassis(''); setCEngine(''); setCColor(''); setCAddr('');
-      console.log('Customer added:', inserted);
     } catch (err: any) {
-      console.error('addCust error:', err);
-      // fallback to local so user still sees record
       const fallback = { ...payload, id: Date.now(), created_at: new Date().toISOString() };
       const updated = [fallback, ...readLocalList('hravo_customer_profiles')];
       writeLocalList('hravo_customer_profiles', updated);
@@ -534,8 +685,6 @@ export default function AdminPage() {
       password: password,
     };
     try {
-      // NOTE: no .select() after insert - the password column is blocked from
-      // public reads by supabase/security-hardening.sql, so RETURNING * would fail.
       let { data, error } = await sup.from('staff_profiles').insert([payload]);
       if (error && error.message.includes('password')) {
         const { password: _p, ...noPassPayload } = payload;
@@ -576,7 +725,6 @@ export default function AdminPage() {
       setCashList(updated);
       console.error('cash_ledger error', err);
     }
-    // also add to transactions for overall balance
     try { await sup.from('transactions').insert([{ type: cashT, amount: Number(cashA), reason: cashR + ' - ' + cashM }]); } catch {}
     setCashR(''); setCashA(''); load();
   };
@@ -946,11 +1094,30 @@ export default function AdminPage() {
             {tab === 'scan' && (
               <div className="space-y-3">
                 <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4">
-                  <p className="font-black text-xs mb-3">SCAN QR</p>
+                  <p className="font-black text-xs mb-3">SCAN QR + OCR (Honda Label)</p>
                   <div id={qrRegionId} className="rounded-xl overflow-hidden bg-black/50 min-h-[200px]"></div>
-                  <div className="flex gap-2 mt-3"><button onClick={()=>startCam('in')} className="flex-1 bg-white text-black py-2 rounded-xl font-black text-xs">START SCAN</button><button onClick={stopCam} className="flex-1 bg-white/10 py-2 rounded-xl font-black text-xs">STOP</button></div>
-                  <input value={qr} onChange={(e)=>setQr(e.target.value)} placeholder="Or enter code manually" className="w-full mt-2 bg-black/50 border border-white/10 p-3 rounded-xl text-xs" />
-                  <div className="flex gap-2 mt-2"><button onClick={()=>setMode('in')} className={`flex-1 py-2 rounded-full text-xs font-black ${mode==='in'?'bg-green-500 text-black':'bg-white/10'}`}>IN</button><button onClick={()=>setMode('out')} className={`flex-1 py-2 rounded-full text-xs font-black ${mode==='out'?'bg-red-500 text-white':'bg-white/10'}`}>OUT</button></div>
+                  <div className="flex gap-2 mt-3">
+                    <button onClick={()=>startCam('in')} className="flex-1 bg-white text-black py-2 rounded-xl font-black text-xs">SCAN IN</button>
+                    <button onClick={()=>startCam('out')} className="flex-1 bg-red-500 text-black py-2 rounded-xl font-black text-xs">SCAN OUT</button>
+                    <button onClick={()=>startCam('service')} className="flex-1 bg-yellow-500 text-black py-2 rounded-xl font-black text-xs">SCAN SERVICE</button>
+                    <button onClick={stopCam} className="flex-1 bg-white/10 py-2 rounded-xl font-black text-xs">STOP</button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    <button onClick={captureFrameAndOcr} disabled={!scanning || ocrLoading || !ocrReady} className="bg-yellow-500 disabled:opacity-30 text-black py-3 font-black text-xs rounded-xl">{ocrLoading? `${ocrProgress}% OCR...` : '📸 CAPTURE + OCR'}</button>
+                    <button onClick={() => fileInputRef.current?.click()} className="bg-white/10 py-3 rounded-xl font-black text-xs">📁 UPLOAD PHOTO</button>
+                    <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileOcr} className="hidden" />
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    <div className="flex gap-2">
+                      <input value={qr} onChange={(e)=>setQr(e.target.value)} placeholder="Or enter code manually" className="flex-1 bg-black/50 border border-white/10 p-3 rounded-xl text-xs" />
+                      <button onClick={useQr} className="bg-white text-black px-5 rounded-xl font-black text-xs">USE</button>
+                    </div>
+                    <textarea value={ocrText} onChange={(e) => setOcrText(e.target.value)} placeholder="OCR text hetah a lo lang ang..." className="w-full h-20 bg-black border border-white/10 p-3 rounded-xl text-xs font-mono" />
+                    <div className="flex gap-2">
+                      <button onClick={performManualOcr} disabled={!ocrReady} className="flex-1 bg-emerald-500 text-black py-3 rounded-xl font-black text-xs">PARSE OCR TEXT</button>
+                    </div>
+                    <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-[10px] uppercase tracking-[0.2em] text-cyan-300">Status: {scanStatus}</div>
+                  </div>
                 </div>
               </div>
             )}
@@ -1089,7 +1256,7 @@ export default function AdminPage() {
                     <p className="font-black text-xs mb-2">PARTS STOCK ({inv.length})</p>
                     <div className="divide-y divide-white/5 max-h-[70vh] overflow-auto">
                       {inv.map((p:any)=>(
-                        <div key={p.id} className="py-2 flex justify-between text-xs"><span>{p.name} - {p.category} | Qty:{p.stock || p.qty || 0} | Rs {p.price}</span><button onClick={()=>requestDelete('inv', p.id)} className="bg-red-600/20 text-red-400 px-2 rounded-full">DEL</button></div>
+                        <div key={p.id} className="py-2 flex justify-between text-xs"><span>{p.part_no ? p.part_no + ' - ' : ''}{p.name} - {p.category} | Qty:{p.stock || p.qty || 0} | Rs {p.price}</span><button onClick={()=>requestDelete('inv', p.id)} className="bg-red-600/20 text-red-400 px-2 rounded-full">DEL</button></div>
                       ))}
                     </div>
                   </div>

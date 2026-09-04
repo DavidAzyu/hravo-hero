@@ -57,7 +57,7 @@ export default function StaffPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isStartingRef = useRef(false);
-  const isProcessingRef = useRef(false); // FIX LOOP
+  const isProcessingRef = useRef(false);
   const ocrWorkerRef = useRef<any>(null);
   const [ocrReady, setOcrReady] = useState(false);
 
@@ -143,7 +143,11 @@ export default function StaffPage() {
     const garbage = ['AL', 'ETC', 'LL', 'TT'];
     let filtered = clean;
     garbage.forEach(g => { filtered = filtered.replace(new RegExp(`\\b${g}\\b`, 'g'), '') });
-    const codeMatch = filtered.match(/(\d{5}[A-Z]{2,5}\d*[A-Z0-9-]*)/) || filtered.match(/(9\d{4}[A-Z0-9-]+)/) || filtered.match(/(\d{5,12})/);
+    // Improved part number extraction
+    let codeMatch = filtered.match(/(\d{5}[A-Z0-9\-]{4,})/) 
+      || filtered.match(/(\d{5}[A-Z]{2,5}\d*[A-Z0-9-]*)/)
+      || filtered.match(/(9\d{4}[A-Z0-9\-]+)/)
+      || filtered.match(/(\d{5,12})/);
     const mrpMatch = filtered.match(/₹\s*([\d,]+\.?\d*)/) || filtered.match(/MRP[^0-9]*([\d,]+\.?\d*)/i) || filtered.match(/(\d{3,5}\.00)/);
     const qtyMatch = filtered.match(/QUANTITY:\s*(\d+)/i) || filtered.match(/QTY\s*(\d+)/i);
     let name = '';
@@ -187,6 +191,7 @@ export default function StaffPage() {
     if (isProcessingRef.current) return;
     isProcessingRef.current = true;
 
+    // For manual entry: try to extract part number from raw text
     const cleanCode = code.trim().toUpperCase().split(/[\s\n]+/)[0].replace(/[^A-Z0-9-]/g,'');
     if (cleanCode.length < 3) { isProcessingRef.current = false; return; }
 
@@ -195,21 +200,29 @@ export default function StaffPage() {
 
     if (mode === 'service') {
       if (!canCompleteService &&!canViewService) { alert('Service hmu thei lo'); isProcessingRef.current = false; return; }
-      const s = service.find((x: any) => x.qr_code === cleanCode || code.includes(x.qr_code) || x.qr_code?.includes(cleanCode));
-      if (s) {
-        if (s.status === 'completed') { alert('Already Completed - ' + s.customer_name); isProcessingRef.current = false; return; }
-        setCompletingService(s); setCompletePrice(String(s.amount && s.amount > 0? s.amount : 500)); setScanStatus(`Service: ${s.customer_name}`); await stopCam(); isProcessingRef.current = false; return;
+      // Direct DB query, no state search
+      const { data, error } = await sup.from('service_bookings').select('*').eq('qr_code', cleanCode).maybeSingle();
+      if (error) { alert('Service lookup error'); isProcessingRef.current = false; return; }
+      if (data) {
+        if (data.status === 'completed') { alert('Already Completed - ' + data.customer_name); isProcessingRef.current = false; return; }
+        setCompletingService(data);
+        setCompletePrice(String(data.amount && data.amount > 0? data.amount : 500));
+        setScanStatus(`Service: ${data.customer_name}`);
+        await stopCam();
+      } else {
+        alert('Service hmuh loh - QR: ' + cleanCode);
       }
-      const { data } = await sup.from('service_bookings').select('*').eq('qr_code', cleanCode).maybeSingle();
-      if (data) { setCompletingService(data); setCompletePrice(String(data.amount && data.amount > 0? data.amount : 500)); await stopCam(); isProcessingRef.current = false; return; }
-      alert('Service hmuh loh - QR: ' + cleanCode);
       isProcessingRef.current = false;
       return;
     } else if (mode === 'vehicle') {
       if (!canAddVehicle) { alert('Vehicle add thei lo'); isProcessingRef.current = false; return; }
-      setVChassis(cleanCode); await stopCam(); setTab('stock'); isProcessingRef.current = false; return;
+      setVChassis(cleanCode);
+      await stopCam();
+      setTab('stock');
+      isProcessingRef.current = false;
+      return;
     } else {
-      // PARTS - DB atangin fresh zawng - loop fix
+      // PARTS - check DB first
       try {
         await stopCam();
         const { data: invData } = await sup.from('inventory').select('*').eq('part_no', cleanCode).maybeSingle();
@@ -221,7 +234,7 @@ export default function StaffPage() {
           setTimeout(()=>{ isProcessingRef.current = false; }, 2000);
           return;
         }
-        // A awm lo chuan thar
+        // Not in DB -> treat as new, parse full raw text if available
         const parsed = parseHondaQR(code);
         setPendingPart({ code: cleanCode, name: parsed.name!== 'GENUINE PART'? parsed.name : 'GENUINE PART', price: parsed.price || '150', qty: '1' });
         setPName(parsed.name!== 'GENUINE PART'? parsed.name : '');
@@ -234,24 +247,28 @@ export default function StaffPage() {
     }
   };
 
+  // Modified preprocessing: full image, no crop, improved threshold
   const preprocessCanvas = (sourceCanvas: HTMLCanvasElement) => {
     const out = document.createElement('canvas');
-    const cropX = sourceCanvas.width * 0.10;
-    const cropY = sourceCanvas.height * 0.30;
-    const cropW = sourceCanvas.width * 0.80;
-    const cropH = sourceCanvas.height * 0.45;
-    const scale = 2.5;
-    out.width = cropW * scale;
-    out.height = cropH * scale;
+    // Scale down if too large to improve OCR speed
+    const maxDimension = 1200;
+    let scale = 1;
+    if (sourceCanvas.width > maxDimension || sourceCanvas.height > maxDimension) {
+      scale = maxDimension / Math.max(sourceCanvas.width, sourceCanvas.height);
+    }
+    out.width = sourceCanvas.width * scale;
+    out.height = sourceCanvas.height * scale;
     const ctx = out.getContext('2d')!;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, out.width, out.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(sourceCanvas, 0, 0, out.width, out.height);
     const imageData = ctx.getImageData(0, 0, out.width, out.height);
     const data = imageData.data;
+    // Blue channel threshold for Honda labels (blue background, white text)
     for (let i = 0; i < data.length; i += 4) {
       const blue = data[i+2];
       const avg = (data[i] + data[i+1] + data[i+2]) / 3;
-      const v = (blue > 110 && avg > 80)? 255 : 0;
+      // Adjust threshold: keep if blue is dominant and brightness moderate
+      const v = (blue > 100 && avg > 70)? 255 : 0;
       data[i] = data[i+1] = data[i+2] = v;
     }
     ctx.putImageData(imageData, 0, 0);
@@ -259,7 +276,10 @@ export default function StaffPage() {
   };
 
   const runOcrOnImage = async (imageSource: any) => {
-    if (!ocrWorkerRef.current &&!ocrReady) { setScanStatus('OCR init...'); return; }
+    if (!ocrReady || !ocrWorkerRef.current) {
+      setScanStatus('OCR initialising, wait...');
+      return;
+    }
     setOcrLoading(true); setOcrProgress(0);
     let baseCanvas: HTMLCanvasElement;
     try {
@@ -353,8 +373,7 @@ export default function StaffPage() {
     if (!canAddParts) { alert('Parts add thei lo'); return; }
     if (!pName) { alert('Name fill rawh'); return; }
     const sup = getSupabase();
-    const scannedNo = pendingPart?.code || qr; // 12312412 kha heihi
-    // part_no nen save - database ah awm nghal
+    const scannedNo = pendingPart?.code || qr;
     try {
       const { data: existing } = await sup.from('inventory').select('*').eq('part_no', scannedNo).maybeSingle();
       if (existing) {
@@ -363,7 +382,7 @@ export default function StaffPage() {
         await sup.from('inventory').insert([{ name: pName, part_no: scannedNo, category: cat, stock: Number(pQty || 1), price: Number(pPrice || 0) }]);
       }
     } catch {
-      // part_no column a awm loh chuan
+      // If part_no column missing, fallback to name+code
       await sup.from('inventory').insert([{ name: `${scannedNo} - ${pName}`, category: cat, stock: Number(pQty || 1), price: Number(pPrice || 0) }]);
     }
     setShowPartConfirm(false); setPendingPart(null); setPName(''); setPPrice('150'); setPQty('1'); await load(); setTab('parts'); isProcessingRef.current = false;
@@ -490,7 +509,7 @@ export default function StaffPage() {
             <div className="space-y-5 pb-10">
               {tab === 'scan' && (
                 <div className="rounded-[1.75rem] border border-cyan-500/20 bg-slate-950/80 overflow-hidden shadow-[0_0_30px_rgba(34,211,238,0.08)]">
-                  <div className="relative h- sm:h- bg-black">
+                  <div className="relative h-72 sm:h-96 bg-black">
                     <div id={qrRegionId} className="w-full h-full"></div>
                     {!scanning && (<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70"><div className="w-20 h-20 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-2xl">📷</div><p className="text-xs uppercase tracking-[0.3em] text-slate-400">QR scanner ready - {ocrReady? 'OCR Fast Ready' : 'Loading OCR...'}</p></div>)}
                     <canvas ref={canvasRef} className="hidden"></canvas>
@@ -502,7 +521,7 @@ export default function StaffPage() {
                   </div>
                   <div className="grid grid-cols-2 gap-2 p-2 bg-black/20">
                     {scanning? (<button onClick={stopCam} className="w-full bg-white text-black py-3 font-black text-xs rounded-xl">STOP CAMERA</button>) : (<button onClick={() => startCam(mode)} className="w-full bg-cyan-500 text-black py-3 font-black text-xs rounded-xl">START CAMERA - {mode.toUpperCase()}</button>)}
-                    <button onClick={captureFrameAndOcr} disabled={!scanning || ocrLoading} className="w-full bg-yellow-500 disabled:opacity-30 text-black py-3 font-black text-xs rounded-xl">{ocrLoading? `${ocrProgress}% OCR...` : '📸 CAPTURE + OCR'}</button>
+                    <button onClick={captureFrameAndOcr} disabled={!scanning || ocrLoading || !ocrReady} className="w-full bg-yellow-500 disabled:opacity-30 text-black py-3 font-black text-xs rounded-xl">{ocrLoading? `${ocrProgress}% OCR...` : '📸 CAPTURE + OCR'}</button>
                   </div>
                   <div className="p-3 space-y-2 border-t border-white/5 bg-black/20">
                     <div className="flex gap-2"><input value={qr} onChange={(e) => setQr(e.target.value)} placeholder="QR Manual e.g. 12312412" className="flex-1 bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs font-mono" /><button onClick={() => handleQr(qr)} className="bg-white text-black px-5 rounded-xl font-black text-xs">USE</button></div>
@@ -511,7 +530,7 @@ export default function StaffPage() {
                       <div className="flex gap-2">
                         <button onClick={() => fileInputRef.current?.click()} className="flex-1 bg-white/10 py-3 rounded-xl font-black text-xs">📁 UPLOAD PHOTO</button>
                         <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileOcr} className="hidden" />
-                        <button onClick={performManualOcr} className="bg-emerald-500 text-black px-5 rounded-xl font-black text-xs">PARSE</button>
+                        <button onClick={performManualOcr} disabled={!ocrReady} className="bg-emerald-500 text-black px-5 rounded-xl font-black text-xs">PARSE</button>
                       </div>
                       <textarea value={ocrText} onChange={(e) => setOcrText(e.target.value)} placeholder="OCR text hetah a lo lang ang..." className="w-full h-24 bg-black border border-white/10 p-3 rounded-xl text-xs font-mono" />
                     </div>
@@ -533,7 +552,7 @@ export default function StaffPage() {
                       </div>
                     </div>
                   )}
-                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h- overflow-auto">
+                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h-[70vh] overflow-auto">
                     <div className="p-3 flex gap-2"><button onClick={() => setVCat('bike')} className={`flex-1 py-2 rounded-full text-xs font-black ${vCat === 'bike'? 'bg-white text-black' : 'bg-white/5'}`}>BIKE</button><button onClick={() => setVCat('scooty')} className={`flex-1 py-2 rounded-full text-xs font-black ${vCat === 'scooty'? 'bg-white text-black' : 'bg-white/5'}`}>SCOOTY</button></div>
                     {veh.filter((v: any) => v.vehicle_type === vCat).map((v: any) => (<div key={v.id} className="p-3 flex justify-between items-center"><div><p className="font-black text-xs">{v.model_name} - {v.color}</p><p className="text-xs opacity-40">{v.chassis_no} | {v.engine_no}</p><p className="text-xs text-emerald-300">Stock: {v.stock} | ₹{v.price}</p></div></div>))}
                   </div>
@@ -542,20 +561,20 @@ export default function StaffPage() {
               {tab === 'parts' && canViewParts && (
                 <div className="space-y-3">
                   <div className="flex gap-2"><button onClick={() => setCat('bike')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'bike'? 'bg-white text-black' : 'bg-white/5'}`}>BIKE</button><button onClick={() => setCat('scooty')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'scooty'? 'bg-white text-black' : 'bg-white/5'}`}>SCOOTY</button><button onClick={() => setCat('parts')} className={`flex-1 py-2 rounded-full text-xs font-black ${cat === 'parts'? 'bg-white text-black' : 'bg-white/5'}`}>PARTS</button></div>
-                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h- overflow-auto">{inv.filter((x: any) => x.category === cat).map((v: any) => (<div key={v.id} className="p-3 flex justify-between items-center"><div><p className="font-black text-xs">{v.part_no? `${v.part_no} - ` : ''}{v.name}</p><p className="text-xs opacity-40">Stock: {v.stock} | Rs {v.price}</p></div>{canSellParts && (<button onClick={() => setOutId(v.id)} className="bg-white text-black px-3 py-1 rounded-full text-xs font-black">SELL</button>)}</div>))}</div>
+                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h-[70vh] overflow-auto">{inv.filter((x: any) => x.category === cat).map((v: any) => (<div key={v.id} className="p-3 flex justify-between items-center"><div><p className="font-black text-xs">{v.part_no? `${v.part_no} - ` : ''}{v.name}</p><p className="text-xs opacity-40">Stock: {v.stock} | Rs {v.price}</p></div>{canSellParts && (<button onClick={() => setOutId(v.id)} className="bg-white text-black px-3 py-1 rounded-full text-xs font-black">SELL</button>)}</div>))}</div>
                 </div>
               )}
               {tab === 'dawn' && canAddDawn && (
                 <div className="space-y-3">
                   <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4"><div className="space-y-2"><input value={dCust} onChange={(e) => setDCust(e.target.value)} placeholder="Customer Name" className="w-full bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /><input value={dAmt} onChange={(e) => setDAmt(e.target.value)} type="number" placeholder="Amount" className="w-full bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /><div className="grid grid-cols-2 gap-2"><select value={dMode} onChange={(e) => setDMode(e.target.value)} className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs"><option>Cash</option><option>GPay</option><option>PhonePe</option><option>UPI</option></select><input value={dReason} onChange={(e) => setDReason(e.target.value)} placeholder="Reason" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /></div><button onClick={addDawn} className="w-full bg-green-500 text-black py-3 rounded-xl font-black text-xs">+ DAWN</button></div></div>
-                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h- overflow-auto">{myTrans.map((t: any) => (<div key={t.id} className="p-3"><p className="font-black text-xs">₹{t.amount} - {t.reason}</p><p className="text-xs opacity-40">{new Date(t.created_at).toLocaleString()}</p></div>))}</div>
+                  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h-[70vh] overflow-auto">{myTrans.map((t: any) => (<div key={t.id} className="p-3"><p className="font-black text-xs">₹{t.amount} - {t.reason}</p><p className="text-xs opacity-40">{new Date(t.created_at).toLocaleString()}</p></div>))}</div>
                 </div>
               )}
               {tab === 'service' && canViewService && (
-                <div className="space-y-3"><div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h- overflow-auto">{service.map((item: any) => (<div key={item.id} className="p-3"><p className="font-black text-xs">{item.customer_name} | {item.model_name}</p><p className="text-xs opacity-40">{item.service_type} | {item.status} | ₹{item.amount || 'Pending'}</p>{item.status!== 'completed' && canCompleteService && (<button onClick={() => setCompletingService(item)} className="mt-2 bg-green-500 text-black px-3 py-1 rounded-full text- font-black">COMPLETE</button>)}</div>))}</div></div>
+                <div className="space-y-3"><div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] divide-y divide-white/5 max-h-[70vh] overflow-auto">{service.map((item: any) => (<div key={item.id} className="p-3"><p className="font-black text-xs">{item.customer_name} | {item.model_name}</p><p className="text-xs opacity-40">{item.service_type} | {item.status} | ₹{item.amount || 'Pending'}</p>{item.status!== 'completed' && canCompleteService && (<button onClick={() => setCompletingService(item)} className="mt-2 bg-green-500 text-black px-3 py-1 rounded-full text- font-black">COMPLETE</button>)}</div>))}</div></div>
               )}
               {tab === 'transactions' && canViewMyTransactions && (
-                <div className="space-y-3"><div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4"><p className="font-black text-xs mb-3">MY WORK - ₹{myTotal.toLocaleString()}</p><div className="divide-y divide-white/5 max-h- overflow-auto">{myTrans.map((t: any) => (<div key={t.id} className="p-3"><p className="font-black text-xs">₹{Number(t.amount || 0).toLocaleString()} - {t.reason}</p><p className="text-xs opacity-40">{new Date(t.created_at).toLocaleString()}</p></div>))}{myTrans.length === 0 && <p className="text-xs opacity-30 p-3">No transactions yet!</p>}</div></div></div>
+                <div className="space-y-3"><div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4"><p className="font-black text-xs mb-3">MY WORK - ₹{myTotal.toLocaleString()}</p><div className="divide-y divide-white/5 max-h-[70vh] overflow-auto">{myTrans.map((t: any) => (<div key={t.id} className="p-3"><p className="font-black text-xs">₹{Number(t.amount || 0).toLocaleString()} - {t.reason}</p><p className="text-xs opacity-40">{new Date(t.created_at).toLocaleString()}</p></div>))}{myTrans.length === 0 && <p className="text-xs opacity-30 p-3">No transactions yet!</p>}</div></div></div>
               )}
             </div>
           </div>
