@@ -57,7 +57,6 @@ export default function StaffPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isStartingRef = useRef(false);
-  // FAST WORKER - 5 mins fix
   const ocrWorkerRef = useRef<any>(null);
   const [ocrReady, setOcrReady] = useState(false);
 
@@ -100,7 +99,10 @@ export default function StaffPage() {
         const worker = await createWorker('eng', 1, {
           logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); }
         });
-        await worker.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-₹. ' });
+        await worker.setParameters({
+          tessedit_pageseg_mode: 6 as any,
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-₹. '
+        });
         ocrWorkerRef.current = worker;
         setOcrReady(true);
         setScanStatus('OCR Ready Fast');
@@ -174,7 +176,6 @@ export default function StaffPage() {
       price: parsed.price!== '150' && parsed.price!== '2020'? parsed.price : (prev?.price || parsed.price),
       qty: parsed.qty
     }));
-    // Merge QR + OCR
     setPName((prev) => parsed.name && parsed.name.length > 3? parsed.name : prev || parsed.name);
     setPPrice((prev) => parsed.price && parsed.price!== '150'? parsed.price : prev);
     setPQty(parsed.qty);
@@ -200,7 +201,6 @@ export default function StaffPage() {
       if (!canAddVehicle) { alert('Vehicle add thei lo'); return; }
       setVChassis(code); stopCam(); setTab('stock');
     } else {
-      // PARTS - QR ah part number chauh, MRP chu OCR in a zawm
       const partNo = code.trim().toUpperCase().split(/[\s\n]+/)[0].replace(/[^A-Z0-9-]/g,'');
       const existing = inv.find((x:any) => x.part_no === partNo || x.name.includes(partNo));
       if (existing) {
@@ -208,7 +208,6 @@ export default function StaffPage() {
         setPName(existing.name); setPPrice(String(existing.price)); setPQty('1');
         setShowPartConfirm(true); stopCam(); return;
       }
-      // QR atang part no dah, OCR in MRP leh hming rawn zawm ang
       setPendingPart({ code: partNo, name: 'GENUINE PART', price: '150', qty: '1' });
       setPName('GENUINE PART'); setPPrice('150'); setPQty('1');
       setShowPartConfirm(true);
@@ -249,10 +248,7 @@ export default function StaffPage() {
   };
 
   const runOcrOnImage = async (imageSource: any) => {
-    if (!ocrWorkerRef.current &&!ocrReady) {
-      setScanStatus('OCR init... nghak lawk');
-      return;
-    }
+    if (!ocrWorkerRef.current &&!ocrReady) { setScanStatus('OCR init...'); return; }
     setOcrLoading(true); setOcrProgress(0);
     let baseCanvas: HTMLCanvasElement;
     try {
@@ -272,11 +268,7 @@ export default function StaffPage() {
       const { data: { text } } = await ocrWorkerRef.current.recognize(processed);
       const cleaned = text.toUpperCase();
       setOcrText(cleaned);
-      if (cleaned.includes('31600') || cleaned.includes('REGULATOR') || cleaned.includes('2020')) {
-        applyParsedPart(cleaned);
-      } else if (cleaned.trim().length > 5) {
-        applyParsedPart(cleaned);
-      }
+      if (cleaned.trim().length > 5) applyParsedPart(cleaned);
     } catch (e: any) { setScanStatus('OCR failed: ' + e.message); }
     finally { setOcrLoading(false); }
   };
@@ -305,7 +297,7 @@ export default function StaffPage() {
         const html5QrCode = new Html5Qrcode(qrRegionId);
         html5QrCodeRef.current = html5QrCode;
         await html5QrCode.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: qrBoxSize, height: Math.max(180, qrBoxSize - 30) }, aspectRatio: 1.0 }, (decodedText) => handleQr(decodedText), () => {});
-        setScanStatus(ocrReady? 'Camera live - OCR Ready Fast' : 'Camera live');
+        setScanStatus(ocrReady? 'Camera live - OCR Fast Ready' : 'Camera live');
       } catch { setScanning(false); setScanStatus('Camera unavailable'); alert('Camera phal lo - HTTPS ah lut rawh'); }
       isStartingRef.current = false;
     }, 250);
@@ -415,12 +407,12 @@ export default function StaffPage() {
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-xl flex items-center justify-center p-6">
           <div className="bg-[#1a1a1a] border border-green-500/30 rounded-xl p-6 w-full max-w-sm">
             <h3 className="font-black text-green-400 mb-1">PARTS IN - CONFIRM</h3>
-            <p className="font-mono opacity-40 mb-3 text-">QR: {pendingPart.code} {ocrReady? '(OCR Fast Ready)' : '(OCR Loading...)'}</p>
+            <p className="font-mono opacity-40 mb-3 text-">QR: {pendingPart.code} {ocrReady? '(OCR Fast)' : '(Loading...)'}</p>
             <div className="space-y-2 mb-3">
               <div><p className="opacity-50 text-">PART NO</p><p className="font-mono font-black text-xs bg-black p-2 rounded border border-white/10">{pendingPart.code}</p></div>
-              <div><p className="opacity-50 text-">NAME (from OCR)</p><input value={pName} onChange={(e) => setPName(e.target.value)} className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
+              <div><p className="opacity-50 text-">NAME</p><input value={pName} onChange={(e) => setPName(e.target.value)} className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
               <div className="grid grid-cols-2 gap-2">
-                <div><p className="opacity-50 text-">PRICE MRP (from OCR)</p><input value={pPrice} onChange={(e) => setPPrice(e.target.value)} type="number" className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
+                <div><p className="opacity-50 text-">PRICE MRP</p><input value={pPrice} onChange={(e) => setPPrice(e.target.value)} type="number" className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
                 <div><p className="opacity-50 text-">QTY</p><input value={pQty} onChange={(e) => setPQty(e.target.value)} type="number" className="w-full bg-black border border-white/20 p-3 rounded-xl text-sm" /></div>
               </div>
             </div>
