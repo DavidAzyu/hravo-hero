@@ -139,33 +139,49 @@ export default function StaffPage() {
   };
 
   const parseHondaQR = (val: string) => {
-    const clean = val.replace(/\n/g, ' ').replace(/\s+/g, ' ').toUpperCase();
+    let clean = val.replace(/\n/g, ' ').replace(/\s+/g, ' ').toUpperCase();
+    
+    // OCR misread fix: J->3, I->1, O->0 (J1600 -> 31600)
+    clean = clean.replace(/\bJ(?=\d)/g, '3'); 
+    clean = clean.replace(/\bI(?=\d)/g, '1');
+    clean = clean.replace(/\bO(?=\d)/g, '0');
+
+    // Remove garbage words
     const garbage = ['AL', 'ETC', 'LL', 'TT'];
     let filtered = clean;
     garbage.forEach(g => { filtered = filtered.replace(new RegExp(`\\b${g}\\b`, 'g'), '') });
-    // Improved part number extraction
+
+    // Extract part number (relaxed regex to allow letters like J)
     let codeMatch = filtered.match(/(\d{5}[A-Z0-9\-]{4,})/) 
       || filtered.match(/(\d{5}[A-Z]{2,5}\d*[A-Z0-9-]*)/)
       || filtered.match(/(9\d{4}[A-Z0-9\-]+)/)
-      || filtered.match(/(\d{5,12})/);
+      || filtered.match(/(\d{5,12})/)
+      || filtered.match(/([A-Z0-9]{10,15})/); // Catchall for alphanumeric strings
+
     const mrpMatch = filtered.match(/₹\s*([\d,]+\.?\d*)/) || filtered.match(/MRP[^0-9]*([\d,]+\.?\d*)/i) || filtered.match(/(\d{3,5}\.00)/);
     const qtyMatch = filtered.match(/QUANTITY:\s*(\d+)/i) || filtered.match(/QTY\s*(\d+)/i);
+
+    // Extract name - Strictly avoid garbled OCR (e.g. SEETELT RET)
     let name = '';
     if (filtered.includes('REGULATOR')) name = 'REGULATOR RECTIFIER COMPLETE';
     else if (filtered.includes('SEAL OIL')) name = 'SEAL OIL';
     else if (filtered.includes('AIR FILTER')) name = 'AIR FILTER';
     else if (filtered.includes('BRAKE SHOE')) name = 'BRAKE SHOE';
     else if (filtered.includes('SPARK PLUG')) name = 'SPARK PLUG';
-    else {
-      const m = filtered.match(/(?:\d{5}[A-Z0-9-]+)\s+([A-Z ]{5,40}?)(?:\s+MFD|\s+MFG|\s+MRP|\s+NET)/);
-      if (m) name = m[1].trim();
+    else name = 'GENUINE PART'; // Clean name so user can type it manually
+
+    // Fix code: if codeMatch is undefined, try to use clean.slice but limit it
+    let code = codeMatch?.[1]?.replace(/\s/g,'') || '';
+    if (!code) {
+       const match = clean.match(/[A-Z0-9]{8,}/);
+       code = match ? match[0] : clean.slice(0, 16);
     }
-    if (name.length < 4) name = 'GENUINE PART';
+
     return {
-      name: name || (codeMatch? codeMatch[1] : clean.slice(0, 25)),
+      name: name,
       price: mrpMatch? mrpMatch[1].replace(/,/g,'') : '',
       qty: qtyMatch? qtyMatch[1] : '1',
-      code: codeMatch?.[1]?.replace(/\s/g,'') || clean.slice(0, 16)
+      code: code
     };
   };
 
