@@ -4,19 +4,31 @@ import { createClient as SC } from '@supabase/supabase-js';
 import { Html5Qrcode } from 'html5-qrcode';
 import jsQR from 'jsqr'; // Added for static QR detection
 
-// SINGLETON SUPABASE - fixes GoTrueClient multiple instances warning
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = SC(supabaseUrl, supabaseKey, {
-  auth: { persistSession: false, autoRefreshToken: false }
-});
-const getSupabase = () => supabase;
+// FIX: Lazy initialization to prevent build crash if env vars missing
+let supabaseInstance: any = null;
+const getSupabase = () => {
+  if (!supabaseInstance) {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+    if (url && key) {
+      supabaseInstance = SC(url, key, {
+        auth: { persistSession: false, autoRefreshToken: false }
+      });
+    } else {
+      console.warn('Supabase env vars missing. Set them in Vercel!');
+      supabaseInstance = SC('https://placeholder.supabase.co', 'placeholder-anon-key', {
+        auth: { persistSession: false, autoRefreshToken: false }
+      });
+    }
+  }
+  return supabaseInstance;
+};
 
 const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || '';
 
 const verifyAdminPassword = async (pw: string): Promise<'ok' | 'bad' | 'unconfigured'> => {
   try {
-    const { data, error } = await supabase.rpc('verify_admin_password', { p_password: pw });
+    const { data, error } = await getSupabase().rpc('verify_admin_password', { p_password: pw });
     if (!error) return data === true ? 'ok' : 'bad';
   } catch {}
   if (ADMIN_PASSWORD !== '') {
@@ -314,8 +326,12 @@ export default function AdminPage() {
     const initWorker = async () => {
       try {
         const { createWorker } = await import('tesseract.js');
+        // FIX: Added CDN paths to bypass Vercel's allow-scripts blocking
         const worker = await createWorker('eng', 1, {
-          logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); }
+          logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); },
+          workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+          corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5',
+          langPath: 'https://tessdata.projectnaptha.com/4.0.0'
         });
         // Fixed: Sparse text mode (11) and removed whitelist to prevent cutting numbers
         await worker.setParameters({
@@ -545,7 +561,8 @@ export default function AdminPage() {
     const cleanCode = val.trim().toUpperCase().split(/[\s\n]+/)[0].replace(/[^A-Z0-9-]/g,'');
     if (mode === 'in') {
       const sup = getSupabase();
-      sup.from('inventory').select('*').eq('part_no', cleanCode).maybeSingle().then(({data}) => {
+      // FIX: Added `: { data: any }` to prevent TS error
+      sup.from('inventory').select('*').eq('part_no', cleanCode).maybeSingle().then(({ data }: { data: any }) => {
         if (data) {
           setPendingPart({ code: data.part_no, name: data.name, price: String(data.price), qty: '1' });
           setPName(data.name);
@@ -569,7 +586,8 @@ export default function AdminPage() {
     }
     if (mode === 'out') {
       const sup = getSupabase();
-      sup.from('inventory').select('*').eq('part_no', cleanCode).maybeSingle().then(({data}) => {
+      // FIX: Added `: { data: any }` to prevent TS error
+      sup.from('inventory').select('*').eq('part_no', cleanCode).maybeSingle().then(({ data }: { data: any }) => {
         if (data) setOutId(data.id);
         isProcessingRef.current = false;
         setTab('parts');
@@ -579,7 +597,8 @@ export default function AdminPage() {
     }
     if (mode === 'service') {
       const sup = getSupabase();
-      sup.from('service_bookings').select('*').eq('qr_code', cleanCode).maybeSingle().then(({data}) => {
+      // FIX: Added `: { data: any }` to prevent TS error
+      sup.from('service_bookings').select('*').eq('qr_code', cleanCode).maybeSingle().then(({ data }: { data: any }) => {
         if (data) {
           setCompletingService(data);
           setCompletePrice(String(data.amount || 500));
