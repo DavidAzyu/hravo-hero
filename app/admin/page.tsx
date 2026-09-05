@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { createClient as SC } from '@supabase/supabase-js';
 import { Html5Qrcode } from 'html5-qrcode';
-import jsQR from 'jsqr'; // Added for static QR detection
+import jsQR from 'jsqr';
 
 // FIX: Lazy initialization to prevent build crash if env vars missing
 let supabaseInstance: any = null;
@@ -214,6 +214,9 @@ export default function AdminPage() {
   const ocrWorkerRef = useRef<any>(null);
   const [ocrReady, setOcrReady] = useState(false);
 
+  // MOBILE NAV
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
   const load = async () => {
     const sup = getSupabase();
 
@@ -326,14 +329,12 @@ export default function AdminPage() {
     const initWorker = async () => {
       try {
         const { createWorker } = await import('tesseract.js');
-        // FIX: Added CDN paths to bypass Vercel's allow-scripts blocking
         const worker = await createWorker('eng', 1, {
           logger: (m: any) => { if (m.status === 'recognizing text') setOcrProgress(Math.round(m.progress * 100)); },
           workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
           corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5',
           langPath: 'https://tessdata.projectnaptha.com/4.0.0'
         });
-        // Fixed: Sparse text mode (11) and removed whitelist to prevent cutting numbers
         await worker.setParameters({
           tessedit_pageseg_mode: '11' as any
         });
@@ -369,36 +370,31 @@ export default function AdminPage() {
   const parseHondaQR = (val: string) => {
     let clean = val.replace(/\n/g, ' ').replace(/\s+/g, ' ').toUpperCase();
     
-    // OCR misread fix: J->3, I->1, O->0 (J1600 -> 31600)
     clean = clean.replace(/\bJ(?=\d)/g, '3'); 
     clean = clean.replace(/\bI(?=\d)/g, '1');
     clean = clean.replace(/\bO(?=\d)/g, '0');
 
-    // Remove garbage words
     const garbage = ['AL', 'ETC', 'LL', 'TT'];
     let filtered = clean;
     garbage.forEach(g => { filtered = filtered.replace(new RegExp(`\\b${g}\\b`, 'g'), '') });
 
-    // Extract part number (relaxed regex to allow letters like J)
     let codeMatch = filtered.match(/(\d{5}[A-Z0-9\-]{4,})/) 
       || filtered.match(/(\d{5}[A-Z]{2,5}\d*[A-Z0-9-]*)/)
       || filtered.match(/(9\d{4}[A-Z0-9\-]+)/)
       || filtered.match(/(\d{5,12})/)
-      || filtered.match(/([A-Z0-9]{10,15})/); // Catchall for alphanumeric strings
+      || filtered.match(/([A-Z0-9]{10,15})/);
 
     const mrpMatch = filtered.match(/₹\s*([\d,]+\.?\d*)/) || filtered.match(/MRP[^0-9]*([\d,]+\.?\d*)/i) || filtered.match(/(\d{3,5}\.00)/);
     const qtyMatch = filtered.match(/QUANTITY:\s*(\d+)/i) || filtered.match(/QTY\s*(\d+)/i);
 
-    // Extract name - Strictly avoid garbled OCR (e.g. SEETELT RET)
     let name = '';
     if (filtered.includes('REGULATOR')) name = 'REGULATOR RECTIFIER COMPLETE';
     else if (filtered.includes('SEAL OIL')) name = 'SEAL OIL';
     else if (filtered.includes('AIR FILTER')) name = 'AIR FILTER';
     else if (filtered.includes('BRAKE SHOE')) name = 'BRAKE SHOE';
     else if (filtered.includes('SPARK PLUG')) name = 'SPARK PLUG';
-    else name = 'GENUINE PART'; // Clean name so user can type it manually
+    else name = 'GENUINE PART';
 
-    // Fix code: if codeMatch is undefined, try to use clean.slice but limit it
     let code = codeMatch?.[1]?.replace(/\s/g,'') || '';
     if (!code) {
        const match = clean.match(/[A-Z0-9]{8,}/);
@@ -429,10 +425,8 @@ export default function AdminPage() {
     setScanStatus(`Part: ${parsed.code} - ${parsed.name} - ₹${parsed.price}`);
   };
 
-  // Fixed: Grayscale threshold for Hero labels (white background, black/red text)
   const preprocessCanvas = (sourceCanvas: HTMLCanvasElement) => {
     const out = document.createElement('canvas');
-    // Fixed: Increased resolution from 1200 to 2400 to improve small text
     const maxDimension = 2400;
     let scale = 1;
     if (sourceCanvas.width > maxDimension || sourceCanvas.height > maxDimension) {
@@ -445,7 +439,6 @@ export default function AdminPage() {
     ctx.drawImage(sourceCanvas, 0, 0, out.width, out.height);
     const imageData = ctx.getImageData(0, 0, out.width, out.height);
     const data = imageData.data;
-    // Fixed: Convert to grayscale for high contrast
     for (let i = 0; i < data.length; i += 4) {
       const r = data[i];
       const g = data[i+1];
@@ -458,7 +451,6 @@ export default function AdminPage() {
     return out;
   };
 
-  // New: Helper to rotate canvas by 180 degrees (fixes upside down images)
   const rotateCanvas = (canvas: HTMLCanvasElement, angle: number) => {
     const newCanvas = document.createElement('canvas');
     newCanvas.width = canvas.width;
@@ -484,7 +476,6 @@ export default function AdminPage() {
         const url = URL.createObjectURL(imageSource);
         await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
 
-        // NEW: Check for QR code in the uploaded file FIRST
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = img.width; tempCanvas.height = img.height;
         const tctx = tempCanvas.getContext('2d')!;
@@ -493,15 +484,14 @@ export default function AdminPage() {
         const qrCode = jsQR(imageData.data, imageData.width, imageData.height);
 
         if (qrCode && qrCode.data) {
-          // QR awm ta - a data hmang lawk rawh, OCR skip
           URL.revokeObjectURL(url);
           handleQrSuccess(qrCode.data);
-          return; // finally block will setOcrLoading(false)
+          return;
         }
         URL.revokeObjectURL(url);
 
         baseCanvas = document.createElement('canvas');
-        const maxW = 1400; // Increased slightly for better file OCR
+        const maxW = 1400;
         const sc = Math.min(1, maxW / img.width);
         baseCanvas.width = img.width * sc; baseCanvas.height = img.height * sc;
         baseCanvas.getContext('2d')!.drawImage(img, 0, 0, baseCanvas.width, baseCanvas.height);
@@ -510,7 +500,6 @@ export default function AdminPage() {
       const processed = preprocessCanvas(baseCanvas);
       let { data: { text, confidence } } = await ocrWorkerRef.current.recognize(processed);
 
-      // Fixed: Check if image is upside down (confidence low), try rotating 180
       if (confidence < 60) {
         const rotated = rotateCanvas(processed, 180);
         const res2 = await ocrWorkerRef.current.recognize(rotated);
@@ -535,17 +524,14 @@ export default function AdminPage() {
     const ctx = canvas.getContext('2d')!;
     ctx.drawImage(video, 0, 0);
     
-    // NEW: Try to decode QR from the captured frame first
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const qrCode = jsQR(imageData.data, imageData.width, imageData.height);
     
     if (qrCode && qrCode.data) {
-      // QR awm ta - a data hmang lawk rawh, OCR skip
       handleQrSuccess(qrCode.data);
       return;
     }
 
-    // QR awm loh chuan normal OCR a kal zel ang
     await runOcrOnImage(canvas);
   };
 
@@ -561,7 +547,6 @@ export default function AdminPage() {
     const cleanCode = val.trim().toUpperCase().split(/[\s\n]+/)[0].replace(/[^A-Z0-9-]/g,'');
     if (mode === 'in') {
       const sup = getSupabase();
-      // FIX: Added `: { data: any }` to prevent TS error
       sup.from('inventory').select('*').eq('part_no', cleanCode).maybeSingle().then(({ data }: { data: any }) => {
         if (data) {
           setPendingPart({ code: data.part_no, name: data.name, price: String(data.price), qty: '1' });
@@ -586,7 +571,6 @@ export default function AdminPage() {
     }
     if (mode === 'out') {
       const sup = getSupabase();
-      // FIX: Added `: { data: any }` to prevent TS error
       sup.from('inventory').select('*').eq('part_no', cleanCode).maybeSingle().then(({ data }: { data: any }) => {
         if (data) setOutId(data.id);
         isProcessingRef.current = false;
@@ -597,7 +581,6 @@ export default function AdminPage() {
     }
     if (mode === 'service') {
       const sup = getSupabase();
-      // FIX: Added `: { data: any }` to prevent TS error
       sup.from('service_bookings').select('*').eq('qr_code', cleanCode).maybeSingle().then(({ data }: { data: any }) => {
         if (data) {
           setCompletingService(data);
@@ -989,11 +972,11 @@ export default function AdminPage() {
     { id: 'scan', label: 'Scan', icon: '◌', adminOnly: false },
     { id: 'forms', label: 'FORMS', icon: '✎', adminOnly: false },
     { id: 'records', label: 'RECORDS', icon: '☰', adminOnly: false },
-    { id: 'rides', label: 'RIDES (Test Drive)', icon: '🚗', adminOnly: false },
+    { id: 'rides', label: 'RIDES', icon: '🚗', adminOnly: false },
     { id: 'cash', label: 'Cash', icon: '◫', adminOnly: false },
-    { id: 'bills', label: 'BILLS / PRINT', icon: '⎙', adminOnly: false },
-    { id: 'finance', label: 'Finance (Admin)', icon: '◈', adminOnly: true },
-    { id: 'settings', label: 'Settings (Admin)', icon: '⚙', adminOnly: true },
+    { id: 'bills', label: 'BILLS', icon: '⎙', adminOnly: false },
+    { id: 'finance', label: 'Finance', icon: '◈', adminOnly: true },
+    { id: 'settings', label: 'Settings', icon: '⚙', adminOnly: true },
   ];
   const visibleNav = navItems.filter((item:any) => !item.adminOnly || settingsUnlocked);
   const formTabs = [
@@ -1018,6 +1001,15 @@ export default function AdminPage() {
     {id:'finance_journal', label:'Finance Journal'},
   ];
 
+  // Mobile bottom nav items (shortened labels for small screens)
+  const mobileNavItems = [
+    { id: 'dash', label: 'Home', icon: '◉' },
+    { id: 'scan', label: 'Scan', icon: '◌' },
+    { id: 'forms', label: 'Forms', icon: '✎' },
+    { id: 'records', label: 'Recs', icon: '☰' },
+    { id: 'cash', label: 'Cash', icon: '◫' },
+  ];
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-[#05070b] text-white flex items-center justify-center p-6">
@@ -1038,6 +1030,14 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-[#05070b] text-white">
       <div className="fixed inset-0 bg-[radial-gradient(circle_at_top,_rgba(239,68,68,0.18),_transparent_25%),radial-gradient(circle_at_bottom_right,_rgba(59,130,246,0.12),_transparent_22%)]" />
+
+      {/* OVERLAY FOR MOBILE MENU */}
+      {mobileMenuOpen && (
+        <div 
+          className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm lg:hidden"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
 
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-xl flex items-center justify-center p-6">
@@ -1101,6 +1101,7 @@ export default function AdminPage() {
       )}
 
       <div className="relative z-10 flex min-h-screen">
+        {/* DESKTOP SIDEBAR - hidden on mobile */}
         <aside className="hidden w-72 shrink-0 border-r border-white/10 bg-slate-950/80 p-5 lg:flex lg:flex-col">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-red-600 text-lg font-black">H</div>
@@ -1114,7 +1115,7 @@ export default function AdminPage() {
             {visibleNav.map((item: any) => (
               <button
                 key={item.id}
-                onClick={() => setTab(item.id)}
+                onClick={() => { setTab(item.id); setMobileMenuOpen(false); }}
                 className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left text-sm font-semibold transition ${
                   tab === item.id ? 'bg-white text-black shadow-lg shadow-white/10' : 'bg-white/5 text-slate-300 hover:bg-white/10'
                 }`}
@@ -1152,27 +1153,77 @@ export default function AdminPage() {
           </div>
         </aside>
 
-        <main className="flex-1">
-          <header className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/80 backdrop-blur-xl">
-            <div className="flex items-center justify-between px-4 py-4 md:px-6">
+        {/* MOBILE DRAWER - slides in from left */}
+        <div className={`fixed top-0 left-0 h-full w-72 z-50 bg-slate-950 border-r border-white/10 transform transition-transform duration-300 ease-in-out lg:hidden ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+          <div className="p-5 flex flex-col h-full">
+            <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-600 text-sm font-black lg:hidden">H</div>
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-red-600 text-sm font-black">H</div>
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.38em] text-red-400">HRAVO</p>
+                  <h1 className="text-sm font-black tracking-[0.2em]">ADMIN</h1>
+                </div>
+              </div>
+              <button onClick={() => setMobileMenuOpen(false)} className="text-white/60 text-xl">✕</button>
+            </div>
+            <nav className="flex-1 space-y-1 overflow-y-auto">
+              {visibleNav.map((item: any) => (
+                <button
+                  key={item.id}
+                  onClick={() => { setTab(item.id); setMobileMenuOpen(false); }}
+                  className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left text-sm font-semibold transition ${
+                    tab === item.id ? 'bg-white text-black shadow-lg shadow-white/10' : 'bg-white/5 text-slate-300 hover:bg-white/10'
+                  }`}
+                >
+                  <span className="text-base">{item.icon}</span>
+                  <span>{item.label}</span>
+                  {item.id === 'settings' && !settingsUnlocked && <span className="ml-auto text-[10px] bg-red-600 text-white px-2 py-1 rounded-full">LOCKED</span>}
+                  {item.id === 'settings' && settingsUnlocked && <span className="ml-auto text-[10px] bg-green-500 text-black px-2 py-1 rounded-full">UNLOCKED</span>}
+                </button>
+              ))}
+            </nav>
+            <div className="pt-4 border-t border-white/10">
+              <div className="rounded-[1.2rem] border border-red-500/20 bg-red-500/10 p-3">
+                <p className="text-[9px] font-bold uppercase tracking-[0.3em] text-red-300">Cashflow</p>
+                <p className="mt-1 text-lg font-black">₹{bal.toLocaleString()}</p>
+                <p className="text-[10px] text-slate-300">Due: ₹{due.toLocaleString()}</p>
+              </div>
+              <button onClick={handleLogout} className="w-full mt-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold uppercase tracking-[0.2em] hover:bg-white/10">Logout</button>
+            </div>
+          </div>
+        </div>
+
+        <main className="flex-1 min-w-0">
+          <header className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/80 backdrop-blur-xl">
+            <div className="flex items-center justify-between px-4 py-3 md:px-6">
+              <div className="flex items-center gap-3">
+                {/* Hamburger button - visible on mobile */}
+                <button 
+                  onClick={() => setMobileMenuOpen(true)} 
+                  className="lg:hidden flex flex-col gap-1.5 p-1.5 text-white/70 hover:text-white"
+                  aria-label="Toggle menu"
+                >
+                  <span className="block w-5 h-0.5 bg-current rounded-full"></span>
+                  <span className="block w-5 h-0.5 bg-current rounded-full"></span>
+                  <span className="block w-5 h-0.5 bg-current rounded-full"></span>
+                </button>
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-red-600 text-sm font-black lg:hidden">H</div>
                 <div>
                   <p className="text-[10px] uppercase tracking-[0.34em] text-red-400">Dashboard</p>
-                  <h2 className="mt-1 text-xl font-black tracking-[0.12em]">HRAVO</h2>
+                  <h2 className="mt-0.5 text-lg font-black tracking-[0.12em]">HRAVO</h2>
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
-                {!settingsUnlocked && <button onClick={()=>{ const p=prompt('Admin Password:'); if(p){ setSettingsPass(p); if(p===ADMIN_PASSWORD){ setSettingsUnlocked(true); alert('Admin Unlocked - Finance and Settings now visible'); } else alert('Wrong password'); } }} className="rounded-full bg-orange-500 text-black px-3 py-2 text-[10px] font-black">ADMIN UNLOCK</button>}
-                {settingsUnlocked && <span className="hidden md:block text-[10px] bg-green-500 text-black px-3 py-1 rounded-full font-black">ADMIN MODE</span>}
-                <div className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold md:block">₹{bal.toLocaleString()}</div>
-                <button onClick={handleLogout} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold uppercase tracking-[0.2em] hover:bg-white/10">Logout</button>
+                {!settingsUnlocked && <button onClick={()=>{ const p=prompt('Admin Password:'); if(p){ setSettingsPass(p); if(p===ADMIN_PASSWORD){ setSettingsUnlocked(true); alert('Admin Unlocked - Finance and Settings now visible'); } else alert('Wrong password'); } }} className="rounded-full bg-orange-500 text-black px-3 py-1.5 text-[10px] font-black hidden sm:block">ADMIN UNLOCK</button>}
+                {settingsUnlocked && <span className="hidden sm:block text-[10px] bg-green-500 text-black px-3 py-1 rounded-full font-black">ADMIN MODE</span>}
+                <div className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold md:block">₹{bal.toLocaleString()}</div>
+                <button onClick={handleLogout} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.2em] hover:bg-white/10 whitespace-nowrap">Logout</button>
               </div>
             </div>
           </header>
 
-          <div className="p-4 md:p-6">
+          <div className="p-3 md:p-6 pb-24 lg:pb-6">
             
             {tab === 'dash' && (
               <div className="space-y-3">
@@ -1190,11 +1241,11 @@ export default function AdminPage() {
                 <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4">
                   <p className="font-black text-xs mb-3">SCAN QR + OCR (Hero Label)</p>
                   <div id={qrRegionId} className="rounded-xl overflow-hidden bg-black/50 min-h-[200px]"></div>
-                  <div className="flex gap-2 mt-3">
-                    <button onClick={()=>startCam('in')} className="flex-1 bg-white text-black py-2 rounded-xl font-black text-xs">SCAN IN</button>
-                    <button onClick={()=>startCam('out')} className="flex-1 bg-red-500 text-black py-2 rounded-xl font-black text-xs">SCAN OUT</button>
-                    <button onClick={()=>startCam('service')} className="flex-1 bg-yellow-500 text-black py-2 rounded-xl font-black text-xs">SCAN SERVICE</button>
-                    <button onClick={stopCam} className="flex-1 bg-white/10 py-2 rounded-xl font-black text-xs">STOP</button>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button onClick={()=>startCam('in')} className="flex-1 min-w-[60px] bg-white text-black py-2 rounded-xl font-black text-xs">SCAN IN</button>
+                    <button onClick={()=>startCam('out')} className="flex-1 min-w-[60px] bg-red-500 text-black py-2 rounded-xl font-black text-xs">SCAN OUT</button>
+                    <button onClick={()=>startCam('service')} className="flex-1 min-w-[60px] bg-yellow-500 text-black py-2 rounded-xl font-black text-xs">SCAN SERVICE</button>
+                    <button onClick={stopCam} className="flex-1 min-w-[60px] bg-white/10 py-2 rounded-xl font-black text-xs">STOP</button>
                   </div>
                   <div className="grid grid-cols-2 gap-2 mt-2">
                     <button onClick={captureFrameAndOcr} disabled={!scanning || ocrLoading || !ocrReady} className="bg-yellow-500 disabled:opacity-30 text-black py-3 font-black text-xs rounded-xl">{ocrLoading? `${ocrProgress}% OCR...` : '📸 CAPTURE + OCR'}</button>
@@ -1273,7 +1324,6 @@ export default function AdminPage() {
                     <div className="grid grid-cols-3 gap-2 mt-2"><input value={vColor} onChange={(e)=>setVColor(e.target.value)} placeholder="Color" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /><input value={vPrice} onChange={(e)=>setVPrice(e.target.value)} type="number" placeholder="Price" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /><input value={vQty} onChange={(e)=>setVQty(e.target.value)} type="number" placeholder="Qty" className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" /></div>
                     <div className="grid grid-cols-2 gap-2 mt-2">
                       <input type="file" accept="image/*" onChange={uploadImage} className="bg-black/50 border border-white/10 p-3 rounded-xl text-xs" />
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       {vImage && <img src={vImage} alt="Vehicle preview" className="h-12 w-12 rounded-full object-cover" />}
                     </div>
                     <button onClick={addVeh} className="w-full mt-3 bg-white text-black py-3 rounded-xl font-black text-xs">ADD VEHICLE</button>
@@ -1937,6 +1987,32 @@ export default function AdminPage() {
             )}
           </div>
         </main>
+      </div>
+
+      {/* MOBILE BOTTOM NAV - fixed at bottom on small screens */}
+      <div className="fixed bottom-0 left-0 right-0 z-30 bg-slate-950/95 border-t border-white/10 backdrop-blur-xl lg:hidden">
+        <div className="flex justify-around items-center px-1 py-1.5">
+          {mobileNavItems.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setTab(item.id)}
+              className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl text-[10px] font-semibold transition min-w-[50px] ${
+                tab === item.id ? 'text-white bg-white/10' : 'text-white/40'
+              }`}
+            >
+              <span className="text-base">{item.icon}</span>
+              <span>{item.label}</span>
+            </button>
+          ))}
+          {/* More button to open drawer for extra tabs */}
+          <button
+            onClick={() => setMobileMenuOpen(true)}
+            className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl text-[10px] font-semibold transition min-w-[50px] text-white/40`}
+          >
+            <span className="text-base">⋯</span>
+            <span>More</span>
+          </button>
+        </div>
       </div>
     </div>
   );
